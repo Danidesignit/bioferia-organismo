@@ -23,7 +23,6 @@ p5.js se carga desde cdnjs. Para usarlo sin internet en la feria, descargá `p5.
 | Tecla / gesto | Acción |
 |---|---|
 | Espacio / N | Sumar un pulso simulado |
-| Arrastrar o tocar | Dibujar un pulso a mano (varios toques seguidos = ritmo) |
 | B | Ráfaga de 10 pulsos |
 | A | Simulación automática sí/no |
 | G | Panel de parámetros |

@@ -7,7 +7,7 @@ const CONF_KEY = 'bioferia-config-v2';
 
 let org, renderer;
 let avgFrame = 16, qualityTimer = 0;
-let autoTimer = 3, stored = [], gesture = null, gestureTimer = null, hudCount = -1;
+let autoTimer = 3, stored = [], hudCount = -1;
 
 /* ---------- persistencia ---------- */
 function loadConfig() { try { const s = JSON.parse(localStorage.getItem(CONF_KEY) || 'null'); if (s) Object.assign(CONFIG, s); } catch (_) {} }
@@ -69,7 +69,6 @@ function draw() {
 
   renderer.begin();
   org.draw(renderer.ctx);
-  drawGesture(renderer.ctx);
   renderer.finish(org);
 
   if (org.total !== hudCount) {
@@ -116,47 +115,6 @@ function applyTheme(name) {
   CONFIG.theme = name;
   document.body.dataset.theme = HEATMAPS[name].ui;
   renderer.setTheme(name);
-}
-
-/* ---------- gesto de prueba con mouse/touch sobre la pantalla colectiva ----------
-   Arrastrar = trazo · varios toques seguidos = ritmo. Simula lo que hará /pulso. */
-function isCanvasEvent(e) { return !e || !e.target || e.target.tagName === 'CANVAS'; }
-function mousePressed(e) {
-  if (!isCanvasEvent(e)) return;
-  clearTimeout(gestureTimer);
-  if (!gesture) gesture = { t0: millis(), points: [], taps: [] };
-  gesture.down = true;
-  const tt = millis() - gesture.t0, taps = gesture.taps;
-  if (!taps.length || tt - taps[taps.length - 1] > 80) taps.push(tt);
-  addGesturePoint();
-}
-function mouseDragged(e) { if (gesture && gesture.down) addGesturePoint(); }
-function mouseReleased() {
-  if (!gesture || !gesture.down) return;
-  gesture.down = false;
-  gestureTimer = setTimeout(finishGesture, 650);
-}
-function addGesturePoint() {
-  const p = gesture.points, x = mouseX / W.w, y = mouseY / W.h, last = p[p.length - 1];
-  if (!last || Math.hypot(x - last[0], y - last[1]) > 0.004) p.push([x, y, millis() - gesture.t0]);
-}
-function finishGesture() {
-  const g = gesture; gesture = null;
-  if (!g || !g.points.length) return;
-  const end = g.points[g.points.length - 1];
-  const duration = Math.max(end[2], g.taps[g.taps.length - 1] + 200);
-  const p = Pulse.create({ points: g.points, taps: g.taps, duration });
-  receive(p, { spawn: { x: end[0] * W.w, y: end[1] * W.h } });
-}
-// mientras se dibuja, el gesto deja calor en pantalla
-function drawGesture(ctx) {
-  if (!gesture || !gesture.points.length) return;
-  const p = gesture.points;
-  ctx.strokeStyle = heatStyle(0.12, 0.5);
-  ctx.lineWidth = 3 * W.S;
-  ctx.beginPath();
-  p.forEach((q, i) => (i ? ctx.lineTo(q[0] * W.w, q[1] * W.h) : ctx.moveTo(q[0] * W.w, q[1] * W.h)));
-  ctx.stroke();
 }
 
 /* ---------- controles ---------- */

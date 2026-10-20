@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-  <meta name="theme-color" content="#ffffff">
+  <meta name="theme-color" content="#000000">
+  <meta name="color-scheme" content="dark">
   <title>Bioferia · Tu pulso</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -25,9 +26,12 @@
 
   <!-- 2 · Creación -->
   <section class="screen" id="create" hidden>
-    <div class="top hint">
+    <div class="top">
+      <div class="logo" aria-label="Bioferia"></div>
+      <div class="hint">
       <h2>Mantené presionado<br>y mové el dedo</h2>
       <p>Cada toque suma un latido</p>
+      </div>
     </div>
     <p class="status" aria-live="polite"></p>
   </section>
@@ -35,7 +39,8 @@
   <!-- 3 · Vista previa -->
   <section class="screen" id="preview" hidden>
     <div class="top">
-      <h2>Este es tu pulso</h2>
+      <div class="logo" aria-label="Bioferia"></div>
+      <h2 style="margin-top:14px">Este es tu pulso</h2>
       <p class="traits"></p>
     </div>
     <div class="bottom">
@@ -47,12 +52,15 @@
   <!-- 4 · Confirmación -->
   <section class="screen" id="sent" hidden>
     <div class="top">
-      <h2>Tu pulso ya forma parte de algo más grande</h2>
-      <p>Buscalo en la pantalla del organismo con este código:</p>
+      <div class="logo" aria-label="Bioferia"></div>
+      <span class="chip">Pulso sumado</span>
+      <h2 style="margin-top:14px">Tu pulso ya forma parte de algo más grande</h2>
+      <p>Mirá la pantalla del organismo: tu pulso llega con este código.</p>
       <div class="code"></div>
     </div>
     <div class="bottom">
       <p class="tag">#SumarParaConectar</p>
+      <button class="btn primary" data-act="share">Compartir</button>
       <button class="btn ghost" data-go="create">Crear otro pulso</button>
     </div>
   </section>

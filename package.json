@@ -1,0 +1,12 @@
+{
+  "name": "bioferia-organismo",
+  "version": "1.0.0",
+  "description": "Bioferia 2027 · organismo vivo — experiencia generativa y participativa",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

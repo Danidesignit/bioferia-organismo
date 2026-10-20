@@ -37,6 +37,19 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); c
 #qr .qr-label { font-size: clamp(11px, .85vw, 16px); color: var(--muted); text-align: right; }
 body.bare #hud { opacity: 0; }
 
+/* código de cada pulso real: acompaña a la forma mientras llega y se acopla */
+#tags { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+.pulse-tag { position: absolute; left: 0; top: 0; transform: translate(-50%, -100%); white-space: nowrap;
+  font: 800 clamp(14px, 1.25vw, 24px)/1 "Bricolage Grotesque", sans-serif; letter-spacing: .04em; color: #ffa6ea;
+  padding: .35em .6em; border-radius: 999px; background: rgba(0, 0, 0, .55); border: 1px solid rgba(255, 166, 234, .45);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); transition: opacity .8s ease; }
+/* zona de texto: últimos pulsos sumados */
+#recent { position: fixed; left: 50%; bottom: clamp(16px, 3vw, 44px); transform: translateX(-50%); text-align: center;
+  pointer-events: none; font-size: clamp(11px, .85vw, 16px); color: var(--muted); max-width: 40vw; }
+#recent b { display: block; margin-top: .35em; color: var(--ink); font: 700 clamp(13px, 1.05vw, 20px)/1.2 "Bricolage Grotesque", sans-serif;
+  letter-spacing: .04em; }
+#recent b em { font-style: normal; color: #ffa6ea; }
+
 /* panel de parámetros */
 #gui { position: fixed; top: 12px; right: 12px; width: min(300px, calc(100vw - 24px)); max-height: calc(100vh - 24px);
   display: flex; flex-direction: column; background: var(--panel); backdrop-filter: blur(14px);

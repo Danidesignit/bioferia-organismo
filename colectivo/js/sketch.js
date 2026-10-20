@@ -33,12 +33,14 @@ function setup() {
   org = new Organism();
 
   loadStore();
+  stored.forEach((p) => { known.add(p.id); if (p.code) realCount++; });
   if (stored.length) {
     for (const p of stored.slice(-CONFIG.maxZooids)) org.addPulse(p, { instant: true });
     org.warmup(3);
   } else seedInitial();
 
   PulseBus.onPulse((p) => receive(p));
+  PulseBus.onInit(receiveHistory);
   GUI.build(onAction, () => saveConfig());
   QR.render();
 }
@@ -70,10 +72,12 @@ function draw() {
   renderer.begin();
   org.draw(renderer.ctx);
   renderer.finish(org);
+  updateTags();
 
   if (org.total !== hudCount) {
     hudCount = org.total;
-    document.getElementById('count').textContent = stored.length || org.zooids.length;
+    // cuenta los aportes reales (los que vienen de un celular); sin ninguno, muestra el total
+    document.getElementById('count').textContent = realCount || stored.length || org.zooids.length;
   }
 }
 
@@ -94,16 +98,58 @@ function adaptQuality(real) {
 }
 
 /* ---------- pulsos ---------- */
+// cada pulso se incorpora una sola vez (puede llegar por el stream y por el historial)
+const known = new Set();
+let realCount = 0;
 function receive(p, opts) {
-  org.addPulse(p, opts);
+  if (!p || !p.f || known.has(p.id)) return;
+  known.add(p.id);
+  if (p.code) realCount++;
+  const z = org.addPulse(p, opts);
   persist(p);
+  hudCount = -1;
+  if (p.code && !(opts && opts.instant)) { addTag(p.code, z); addRecent(p.code); }
+}
+
+/* ---------- códigos: cada visitante encuentra su pulso ---------- */
+const tags = [];
+let recent = [];
+function addTag(code, z) {
+  if (!z) return;
+  const el = document.createElement('div');
+  el.className = 'pulse-tag';
+  el.textContent = '#' + code;
+  document.getElementById('tags').appendChild(el);
+  tags.push({ el, z, t0: performance.now() });
+}
+function addRecent(code) {
+  recent = [code, ...recent.filter((c) => c !== code)].slice(0, 4);
+  const box = document.getElementById('recent');
+  box.hidden = false;
+  box.querySelector('b').textContent = recent.map((c) => '#' + c).join('  ·  ');
+}
+// la etiqueta sigue a su forma ~9 s y se desvanece
+function updateTags() {
+  const now = performance.now();
+  for (let i = tags.length - 1; i >= 0; i--) {
+    const g = tags[i], age = (now - g.t0) / 1000;
+    if (age > 10 || g.z.dead) { g.el.remove(); tags.splice(i, 1); continue; }
+    const x = Math.min(W.w - 60, Math.max(60, g.z.x)), y = Math.min(W.h - 20, Math.max(50, g.z.y - 24 * W.S));
+    g.el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%)`;
+    g.el.style.opacity = age > 8.5 ? 0 : 1;
+  }
+}
+// al conectarse, el servidor manda el historial: se suma lo que esta pantalla todavía no tiene
+function receiveHistory(list) {
+  const fresh = (list || []).filter((p) => p && p.f && !known.has(p.id));
+  fresh.forEach((p) => receive(p, { instant: true }));
 }
 function addSimulated() { receive(Pulse.simulate()); }
 function seedInitial() {
   for (let i = 0; i < CONFIG.initialPulses; i++) setTimeout(addSimulated, 400 + i * 900);
 }
 function resetOrganism() {
-  stored = [];
+  stored = []; known.clear(); realCount = 0;
   try { localStorage.removeItem(STORE_KEY); } catch (_) {}
   org = new Organism();
   seedInitial();

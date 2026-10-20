@@ -97,3 +97,16 @@ EXP.video('mi-video.mp4', 1080, 1920, { seconds: 30, fps: 30, scale: 1.55, warm:
 ```
 
 Los archivos se guardan en `exports/`. `sim` = segundos de crecimiento previo, `scale` = tamaño del organismo en el cuadro, `theme` = `noche` o `dia`, `config` = cualquier parámetro de `CONFIG` (por ejemplo `{ bands: 10, glow: 1 }`).
+
+## Experiencia real (celular → pantalla)
+
+`node server.js` sirve todo y además conecta en tiempo real:
+
+- `POST /api/pulse`: el celular suma su pulso (datos livianos, sin datos personales; máx. uno cada 2,5 s por dispositivo).
+- `GET /api/stream`: la pantalla colectiva escucha en vivo (Server-Sent Events) y al conectarse recibe el historial reciente.
+- Los pulsos se guardan en `data/pulses.json` (en el plan gratis de Render ese archivo se pierde al reiniciar).
+
+`/pulso` (web móvil): bienvenida → gesto táctil (mantener y mover; quieto, la bolita crece; cada toque suma un latido) → vista previa con una frase → confirmación con un código (`#K7F2`) que aparece junto al pulso en la pantalla y en "Recién llegados" → Compartir (imagen 1080×1920 con el menú nativo del celular). Hashtag: #SumarParaConectar.
+
+### Publicar en Render
+Crear un **Web Service** (no Static Site) desde este repo: Build Command vacío (o `npm install`), Start Command `node server.js`, plan Free o Starter.

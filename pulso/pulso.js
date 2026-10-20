@@ -8,10 +8,10 @@ const Q = 0.5;                         // resolución del buffer de calor
 const FINISH_MS = 900;                 // espera después de soltar (permite sumar toques)
 const SUB = { pulso: 'Pulso', vinculo: 'Vínculo', impacto: 'Impacto' };
 
-// mapa térmico de Pulso (lila → violeta → azul → verde → lima)
+// mapa térmico nocturno (el mismo de la pantalla colectiva): negro → azul → violeta → rosa → blanco
 const RAMP = [
-  [0.00, '#ffffff'], [0.07, '#fbe8fb'], [0.18, '#f6bdf1'], [0.32, '#ef86e8'], [0.46, '#d955d8'],
-  [0.58, '#9a2ce0'], [0.66, '#3a2fe0'], [0.73, '#1b2fb0'], [0.79, '#1fa35a'], [0.88, '#5fd13a'], [1.0, '#c8f53a'],
+  [0.00, '#000000'], [0.08, '#04031f'], [0.22, '#1f1fe0'], [0.4, '#6b2cff'],
+  [0.58, '#e23bd6'], [0.78, '#ffa6ea'], [1.0, '#ffffff'],
 ];
 
 const VERT = `
@@ -53,8 +53,8 @@ void main(){
   // isolíneas (lima / rosa) como en los afiches
   float b = h * 7.0, fb = fract(b), d = min(fb, 1.0 - fb);
   float line = (1.0 - smoothstep(0.01, 0.045, d)) * smoothstep(0.3, 0.45, h);
-  col = mix(col, mod(floor(b + 0.5), 2.0) < 1.0 ? vec3(0.85, 1.0, 0.25) : vec3(1.0, 0.35, 0.8), line * 0.55);
-  col += g * 0.04 * smoothstep(0.0, 0.05, h + dots * hc);
+  col = mix(col, mod(floor(b + 0.5), 2.0) < 1.0 ? vec3(0.85, 1.0, 0.23) : vec3(1.0, 0.31, 0.85), line * 0.7);
+  col += g * 0.05 * smoothstep(0.0, 0.05, h + dots * hc) + g * 0.012;
   gl_FragColor = vec4(col, 1.0);
 }`;
 
@@ -163,13 +163,19 @@ function drawCreate(c, t) {
     }
   }
   gesture.drawn = pts.length;
-  // el dedo: un punto que late y crece mientras se mantiene presionado
+  // el dedo: un punto que late; si se queda quieto, la bolita crece cada vez más
   if (gesture.down && pts.length) {
     const [x, y] = pts[pts.length - 1];
-    const hold = (performance.now() - gesture.downAt) / 1000;
+    const still = Math.max(0, (performance.now() - gesture.stillSince) / 1000 - 0.35);
+    const grow = 1 - Math.exp(-still / 2.6);                       // crece rápido al principio y después más lento
     const hb = lubdub(mod(t, 0.9) / 0.9);
-    c.filter = `blur(${S * Q * 0.015}px)`;
-    blob(c, x * S, y * S, S * (0.04 + Math.min(4, hold) * 0.012) * (1 + 0.15 * hb), 0.22 + 0.2 * hb);
+    c.filter = `blur(${S * Q * (0.015 + 0.03 * grow)}px)`;
+    blob(c, x * S, y * S, S * (0.045 + 0.32 * grow) * (1 + 0.12 * hb), (0.2 + 0.18 * hb) * (1 - 0.6 * grow) + 0.05);
+    const beat = Math.floor(t / 0.9);
+    if (grow > 0.08 && beat !== gesture.lastBeat) {                 // cada latido de la bolita suelta una onda
+      gesture.lastBeat = beat;
+      ripples.push({ x: x * S, y: y * S, t0: t, k: 0.5 + grow });
+    }
   }
 }
 
@@ -190,14 +196,14 @@ function drawRipples(c, t) {
 
 /* ---------- 3 · vista previa: el pulso reconstruido desde sus datos ---------- */
 // ubica el recorrido del gesto centrado y escalado en la pantalla
-function layoutPulse(p) {
+function layoutPulse(p, cyK = 0.47, scaleK = 1) {
   const raw = p.raw.points.map((q) => [q[0], q[1]]);
   const rs = Pulse.resample(raw.length ? raw : [[0.5, 0.5]], 48);
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   rs.forEach(([x, y]) => { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); });
   const size = Math.max(x1 - x0, y1 - y0), compact = size < 0.04;
-  const box = Math.min(V.w * 0.78, V.h * 0.42), sc = compact ? 0 : box / size;
-  const cx = V.w / 2, cy = V.h * 0.47;
+  const box = Math.min(V.w * 0.78, V.h * 0.42) * scaleK, sc = compact ? 0 : box / size;
+  const cx = V.w / 2, cy = V.h * cyK;
   const pts = rs.map(([x, y]) => [cx + (x - (x0 + x1) / 2) * sc, cy + (y - (y0 + y1) / 2) * sc]);
   const r = U.rng(p.seed);
   return { p, f: p.f, pts, compact, cx, cy, seed: r() * 100, freq: 0.35 + p.f.energy * 1.1 };
@@ -218,7 +224,7 @@ function drawPulse(c, v, t) {
     const u = k / (n - 1);
     let x, y;
     if (v.compact) {
-      const a = k * 2.399 + t * 0.3, rr = Math.sqrt(k) * S * 0.022 * (1 + f.rhythm * 0.08);
+      const a = k * 2.399 + t * 0.3, rr = Math.sqrt(k) * S * 0.022 * (1 + f.rhythm * 0.08) * (1 + 2.2 * f.duration);
       x = v.cx + Math.cos(a) * rr; y = v.cy + Math.sin(a) * rr;
     } else {
       [x, y] = pts[Math.round(u * last)];
@@ -229,7 +235,7 @@ function drawPulse(c, v, t) {
     for (let b = 0; b < f.rhythm; b++) beat += gauss(u, mod(t * v.freq * 0.35 + b / f.rhythm, 1), 0.12);
     const r = S * (0.06 + 0.035 * f.energy + 0.025 * f.duration) * (1.15 - 0.4 * u)
             * (0.85 + 0.2 * Math.sin(t * v.freq * TAU + k * 1.3)) * (1 + 0.25 * beat) * (0.4 + 0.6 * grow);
-    blob(c, x, y, r, (0.07 + 0.05 * f.energy) * (1 + 1.3 * beat) * grow);
+    blob(c, x, y, v.compact ? r * (1 + 1.4 * f.duration) : r, (0.055 + 0.04 * f.energy) * (1 + 1.2 * beat) * grow);
   }
   // ondas: tantas como toques, al ritmo del pulso
   const origin = v.compact ? [v.cx, v.cy] : pts[0];
@@ -251,7 +257,7 @@ function bindTouch(el) {
     clearTimeout(finishTimer);
     const now = performance.now();
     if (!gesture) gesture = { t0: now, points: [], taps: [], drawn: 0 };
-    gesture.down = true; gesture.downAt = now;
+    gesture.down = true; gesture.downAt = now; gesture.stillSince = now;
     gesture.taps.push(now - gesture.t0);
     const [x, y] = pos(e);
     gesture.points.push([x, y, now - gesture.t0]);
@@ -262,11 +268,13 @@ function bindTouch(el) {
   el.addEventListener('pointermove', (e) => {
     if (!gesture || !gesture.down) return;
     const [x, y] = pos(e), p = gesture.points, l = p[p.length - 1];
-    if (!l || Math.hypot(x - l[0], y - l[1]) > 0.006) p.push([x, y, performance.now() - gesture.t0]);
+    if (!l || Math.hypot(x - l[0], y - l[1]) > 0.006) { p.push([x, y, performance.now() - gesture.t0]); gesture.stillSince = performance.now(); }
   });
-  const up = () => {
+  const up = (e) => {
     if (!gesture || !gesture.down) return;
     gesture.down = false;
+    const [x, y] = pos(e);
+    gesture.points.push([x, y, performance.now() - gesture.t0]);
     status('Tocá de nuevo para sumar latidos…');
     finishTimer = setTimeout(finishGesture, FINISH_MS);
   };
@@ -283,10 +291,17 @@ function finishGesture() {
   pulse.code = makeCode(pulse.seed);
   view = layoutPulse(pulse);
   view.t0 = millis() / 1000;
-  const f = pulse.f, lvl = f.energy > 0.66 ? 'alta' : f.energy > 0.33 ? 'media' : 'suave';
-  document.querySelector('.traits').textContent =
-    `${f.rhythm} ${f.rhythm === 1 ? 'latido' : 'latidos'} · energía ${lvl} · ${SUB[f.accent]}`;
+  document.querySelector('.traits').textContent = describePulse(pulse.f);
   go('preview');
+}
+
+// una frase que describe el pulso según su gesto (en lugar de datos sueltos)
+function describePulse(f) {
+  const lat = f.rhythm === 1 ? 'un latido' : `${['', 'un', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete'][f.rhythm]} latidos`;
+  const pace = f.energy > 0.66 ? 'rápido y con fuerza' : f.energy > 0.33 ? 'con un ritmo propio' : 'despacio, sin apuro';
+  if (f.accent === 'vinculo') return `Tu pulso recorre un camino largo, ${pace}, buscando con quién conectar.`;
+  if (f.accent === 'impacto') return `Tu pulso llega ${pace} y deja huella en todo lo que toca.`;
+  return `Tu pulso late ${pace}: ${lat} que empiezan algo nuevo.`;
 }
 
 // código corto para encontrar el propio pulso en la pantalla colectiva
@@ -317,25 +332,99 @@ function bindUI() {
     const b = e.target.closest('[data-go],[data-act]');
     if (!b) return;
     if (b.dataset.go) go(b.dataset.go);
+    if (b.dataset.act === 'share' && pulse) {
+      b.disabled = true; b.textContent = 'Preparando…';
+      try { await sharePulse(); } catch (_) {}
+      b.disabled = false; b.textContent = 'Compartir';
+    }
     if (b.dataset.act === 'send' && pulse) {
       b.disabled = true; b.textContent = 'Sumando…';
-      try {
-        await PulseBus.send(pulse);
+      const r = await PulseBus.send(pulse);
+      b.disabled = false;
+      if (r.ok) {
         document.querySelector('.code').textContent = '#' + pulse.code;
         ripples.push({ x: view.cx, y: view.cy, t0: millis() / 1000, k: 1.4 });
+        b.textContent = 'Sumar al colectivo';
         go('sent');
-      } catch (_) {
-        b.textContent = 'No se pudo enviar. Reintentar';
+        const t0 = view.t0; view = layoutPulse(pulse, 0.58, 0.7); view.t0 = t0;
+      } else {
+        b.textContent = (r.error || 'No se pudo enviar') + ' · Reintentar';
       }
-      b.disabled = false;
-      if (screen === 'sent') b.textContent = 'Sumar al colectivo';
     }
   });
+}
+
+/* ---------- 5 · compartir: pieza vertical para historias ---------- */
+const HASHTAG = '#SumarParaConectar';
+function wrapText(c, text, x, y, maxW, lh) {
+  const words = text.split(' ');
+  let line = '';
+  for (const w of words) {
+    const test = line ? line + ' ' + w : w;
+    if (c.measureText(test).width > maxW && line) { c.fillText(line, x, y); line = w; y += lh; } else line = test;
+  }
+  if (line) c.fillText(line, x, y);
+  return y;
+}
+async function storyImage() {
+  const SW = 1080, SH = 1920, M = 84;
+  const cvs = document.createElement('canvas'); cvs.width = SW; cvs.height = SH;
+  const c = cvs.getContext('2d');
+  c.fillStyle = '#000'; c.fillRect(0, 0, SW, SH);
+  // el pulso animado tal como se ve ahora (cubre el área central); redraw() asegura un cuadro recién dibujado
+  const keep = view;
+  view = layoutPulse(pulse, 0.5, 0.95); view.t0 = keep.t0;           // centrado para la historia
+  hctx.setTransform(1, 0, 0, 1, 0, 0); hctx.globalCompositeOperation = 'source-over'; hctx.filter = 'none';
+  hctx.fillStyle = '#000'; hctx.fillRect(0, 0, heat.width, heat.height);   // empieza limpio
+  for (let i = 0; i < 24; i++) redraw();                              // deja que el calor se acumule
+  const src = drawingContext.canvas, bw = SW, bh = 1120, by = 230;
+  const s = Math.max(bw / src.width, bh / src.height), w = src.width * s, h = src.height * s;
+  c.save(); c.beginPath(); c.rect(0, by, bw, bh); c.clip();
+  c.drawImage(src, (bw - w) / 2, by + (bh - h) / 2 - bh * 0.03, w, h);
+  c.restore();
+  const fade = (y0, y1, a0, a1) => { const g = c.createLinearGradient(0, y0, 0, y1); g.addColorStop(0, `rgba(0,0,0,${a0})`); g.addColorStop(1, `rgba(0,0,0,${a1})`); c.fillStyle = g; c.fillRect(0, y0, SW, y1 - y0); };
+  fade(by, by + 140, 1, 0); fade(by + bh - 220, by + bh, 0, 1);
+  view = keep;
+  // logo
+  try {
+    const img = new Image(); img.src = '../assets/bioferia-logo.svg';
+    await img.decode();
+    c.drawImage(img, M, 110, 300, 300 * (177 / 869));
+  } catch (_) {}
+  // textos
+  c.fillStyle = '#F4F3EE';
+  c.font = '800 92px "Bricolage Grotesque"';
+  let y = wrapText(c, 'Mi pulso ya es parte del organismo', M, 1420, SW - M * 2, 92);
+  c.fillStyle = 'rgba(244,243,238,.72)';
+  c.font = '500 40px "Instrument Sans"';
+  wrapText(c, describePulse(pulse.f), M, y + 76, SW - M * 2, 52);
+  c.fillStyle = '#ffa6ea';
+  c.font = '800 54px "Bricolage Grotesque"';
+  c.fillText('#' + pulse.code, M, SH - 96);
+  c.fillStyle = '#F4F3EE';
+  c.font = '600 40px "Instrument Sans"';
+  c.textAlign = 'right';
+  c.fillText(HASHTAG, SW - M, SH - 100);
+  return new Promise((r) => cvs.toBlob(r, 'image/png'));
+}
+async function sharePulse() {
+  const blob = await storyImage();
+  const file = new File([blob], `mi-pulso-bioferia-${pulse.code}.png`, { type: 'image/png' });
+  const text = `Sumé mi pulso al organismo vivo de Bioferia. ${HASHTAG}`;
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], text }); return; }
+    catch (e) { if (e && e.name === 'AbortError') return; }      // la persona cerró el menú
+  }
+  // sin menú de compartir (ej.: computadora): se descarga la imagen
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = file.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
 
 async function loadLogo() {
   try {
     const svg = await (await fetch('../assets/bioferia-logo.svg')).text();
-    document.querySelector('.logo').innerHTML = svg.replace(/fill="white"/g, 'fill="currentColor"');
+    document.querySelectorAll('.logo').forEach((el) => (el.innerHTML = svg.replace(/fill="white"/g, 'fill="currentColor"')));
   } catch (_) {}
 }

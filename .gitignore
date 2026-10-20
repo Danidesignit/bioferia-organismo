@@ -1,3 +1,5 @@
 exports/
 exports.zip
 .claude/
+data/
+node_modules/

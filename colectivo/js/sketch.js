@@ -41,6 +41,8 @@ function setup() {
 
   PulseBus.onPulse((p) => receive(p));
   PulseBus.onInit(receiveHistory);
+  // mantiene despierto el servidor gratis de Render mientras la pantalla esté abierta (se duerme a los 15 min sin visitas)
+  setInterval(() => { fetch('/api/count', { cache: 'no-store' }).catch(() => {}); }, 8 * 60 * 1000);
   GUI.build(onAction, () => saveConfig());
   QR.render();
 }

@@ -110,25 +110,39 @@ function receive(p, opts) {
   const z = org.addPulse(p, opts);
   persist(p);
   hudCount = -1;
-  if (p.code && !(opts && opts.instant)) { addTag(p.code, z); addRecent(p.code); }
+  if (p.code && !(opts && opts.instant)) { addTag(p, z); addRecent(p); }
 }
 
 /* ---------- códigos: cada visitante encuentra su pulso ---------- */
 const tags = [];
 let recent = [];
-function addTag(code, z) {
+// etiqueta: el nombre (si lo puso) con el código chico al lado; si no, el código
+function label(p, el) {
+  if (p.name) {
+    const b = document.createElement('span'); b.textContent = p.name;
+    const s = document.createElement('small'); s.textContent = '#' + p.code;
+    el.append(b, s);
+  } else el.textContent = '#' + p.code;
+}
+function addTag(p, z) {
   if (!z) return;
   const el = document.createElement('div');
   el.className = 'pulse-tag';
-  el.textContent = '#' + code;
+  label(p, el);
   document.getElementById('tags').appendChild(el);
   tags.push({ el, z, t0: performance.now() });
 }
-function addRecent(code) {
-  recent = [code, ...recent.filter((c) => c !== code)].slice(0, 4);
-  const box = document.getElementById('recent');
+function addRecent(p) {
+  recent = [p, ...recent.filter((q) => q.code !== p.code)].slice(0, 4);
+  const box = document.getElementById('recent'), b = box.querySelector('b');
   box.hidden = false;
-  box.querySelector('b').textContent = recent.map((c) => '#' + c).join('  ·  ');
+  b.textContent = '';
+  recent.forEach((q, i) => {
+    if (i) b.append('  ·  ');
+    const s = document.createElement('span');
+    s.textContent = q.name || '#' + q.code;
+    b.append(s);
+  });
 }
 // la etiqueta sigue a su forma ~9 s y se desvanece
 function updateTags() {

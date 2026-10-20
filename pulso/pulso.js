@@ -253,7 +253,7 @@ function bindTouch(el) {
   el.addEventListener('pointerdown', (e) => {
     if (screen !== 'create') return;
     e.preventDefault();
-    el.setPointerCapture(e.pointerId);
+    try { el.setPointerCapture(e.pointerId); } catch (_) {}
     clearTimeout(finishTimer);
     const now = performance.now();
     if (!gesture) gesture = { t0: now, points: [], taps: [], drawn: 0 };
@@ -292,6 +292,9 @@ function finishGesture() {
   view = layoutPulse(pulse);
   view.t0 = millis() / 1000;
   document.querySelector('.traits').textContent = describePulse(pulse.f);
+  const inp = document.getElementById('name');
+  inp.placeholder = `Un nombre o apodo (si no, #${pulse.code})`;
+  document.querySelector('.sign-msg').textContent = '';
   go('preview');
 }
 
@@ -338,11 +341,22 @@ function bindUI() {
       b.disabled = false; b.textContent = 'Compartir';
     }
     if (b.dataset.act === 'send' && pulse) {
+      const inp = document.getElementById('name'), msg = document.querySelector('.sign-msg');
+      const { name, rejected } = Names.clean(inp.value);
+      if (rejected) { msg.textContent = 'Ese nombre no se puede usar. Probá con otro o dejalo vacío.'; inp.focus(); return; }
+      msg.textContent = '';
+      if (name) pulse.name = name; else delete pulse.name;
+      inp.blur();
       b.disabled = true; b.textContent = 'Sumando…';
       const r = await PulseBus.send(pulse);
       b.disabled = false;
       if (r.ok) {
-        document.querySelector('.code').textContent = '#' + pulse.code;
+        const code = document.querySelector('.code');
+        code.textContent = pulse.name || '#' + pulse.code;
+        if (pulse.name) { const sm = document.createElement('small'); sm.textContent = '#' + pulse.code; code.appendChild(sm); }
+        document.querySelector('.sent-title').textContent = pulse.name
+          ? `${pulse.name}, tu pulso ya forma parte de algo más grande`
+          : 'Tu pulso ya forma parte de algo más grande';
         ripples.push({ x: view.cx, y: view.cy, t0: millis() / 1000, k: 1.4 });
         b.textContent = 'Sumar al colectivo';
         go('sent');
@@ -394,13 +408,13 @@ async function storyImage() {
   // textos
   c.fillStyle = '#F4F3EE';
   c.font = '800 92px "Bricolage Grotesque"';
-  let y = wrapText(c, 'Mi pulso ya es parte del organismo', M, 1420, SW - M * 2, 92);
+  let y = wrapText(c, pulse.name ? `${pulse.name} ya es parte del organismo` : 'Mi pulso ya es parte del organismo', M, 1420, SW - M * 2, 92);
   c.fillStyle = 'rgba(244,243,238,.72)';
   c.font = '500 40px "Instrument Sans"';
   wrapText(c, describePulse(pulse.f), M, y + 76, SW - M * 2, 52);
   c.fillStyle = '#ffa6ea';
   c.font = '800 54px "Bricolage Grotesque"';
-  c.fillText('#' + pulse.code, M, SH - 96);
+  c.fillText(pulse.name ? `${pulse.name} · #${pulse.code}` : '#' + pulse.code, M, SH - 96);
   c.fillStyle = '#F4F3EE';
   c.font = '600 40px "Instrument Sans"';
   c.textAlign = 'right';

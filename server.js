@@ -8,6 +8,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const Names = require('./shared/names.js');
 
 const PORT = process.env.PORT || 5173;
 const ROOT = __dirname;
@@ -42,6 +43,7 @@ function clean(p) {
     v: 1,
     id: String(p.id || '').replace(/[^\w-]/g, '').slice(0, 40) || Math.random().toString(36).slice(2),
     code: String(p.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6),
+    name: Names.clean(p.name).name,          // opcional; si tiene malas palabras queda vacío
     t: Date.now(),
     seed: Math.floor(clamp(p.seed, 0, 2 ** 31)),
     raw: {

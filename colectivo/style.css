@@ -49,6 +49,7 @@ body.bare #hud { opacity: 0; }
 #recent b { display: block; margin-top: .35em; color: var(--ink); font: 700 clamp(13px, 1.05vw, 20px)/1.2 "Bricolage Grotesque", sans-serif;
   letter-spacing: .04em; }
 #recent b em { font-style: normal; color: #ffa6ea; }
+.pulse-tag small { font-size: .6em; opacity: .7; margin-left: .45em; letter-spacing: .02em; }
 
 /* panel de parámetros */
 #gui { position: fixed; top: 12px; right: 12px; width: min(300px, calc(100vw - 24px)); max-height: calc(100vh - 24px);

@@ -44,6 +44,11 @@
       <p class="traits"></p>
     </div>
     <div class="bottom">
+      <label class="sign">
+        <span>¿Querés firmarlo? <em>(opcional)</em></span>
+        <input id="name" type="text" maxlength="12" autocomplete="off" autocapitalize="words" enterkeyhint="done" placeholder="Un nombre o apodo">
+        <small class="sign-msg" aria-live="polite"></small>
+      </label>
       <button class="btn primary" data-act="send">Sumar al colectivo</button>
       <button class="btn ghost" data-go="create">Volver a crear</button>
     </div>
@@ -54,7 +59,7 @@
     <div class="top">
       <div class="logo" aria-label="Bioferia"></div>
       <span class="chip">Pulso sumado</span>
-      <h2 style="margin-top:14px">Tu pulso ya forma parte de algo más grande</h2>
+      <h2 style="margin-top:14px" class="sent-title">Tu pulso ya forma parte de algo más grande</h2>
       <p>Mirá la pantalla del organismo: tu pulso llega con este código.</p>
       <div class="code"></div>
     </div>
@@ -68,6 +73,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
   <script src="../shared/utils.js"></script>
   <script src="../shared/pulse.js"></script>
+  <script src="../shared/names.js"></script>
   <script src="../shared/bus.js"></script>
   <script src="pulso.js"></script>
 </body>

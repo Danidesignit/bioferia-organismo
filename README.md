@@ -86,3 +86,14 @@ exploraciones/        versiones anteriores para comparar
 1. **/pulso táctil:** lienzo de interacción, vista previa en vivo de la forma (el mismo trazo y el mismo shader, a escala de celular), "Sumar al colectivo" y confirmación.
 2. **Conexión real:** reemplazar `shared/bus.js` por Supabase Realtime o Firebase con la misma interfaz (`send`, `onPulse`); el colectivo no cambia.
 3. **Refinamiento visual:** paleta exacta del manual, tipografía de marca, QR en pantalla, calibración en el proyector real.
+
+## Exportar imágenes y videos
+
+Con `node server.js` corriendo, abrí http://localhost:5173/exportar/ y en la consola del navegador (F12):
+
+```js
+EXP.still('mi-imagen.png', 2160, 3840, { theme: 'noche', sim: 90, scale: 1.35 })
+EXP.video('mi-video.mp4', 1080, 1920, { seconds: 30, fps: 30, scale: 1.55, warm: 60 })
+```
+
+Los archivos se guardan en `exports/`. `sim` = segundos de crecimiento previo, `scale` = tamaño del organismo en el cuadro, `theme` = `noche` o `dia`, `config` = cualquier parámetro de `CONFIG` (por ejemplo `{ bands: 10, glow: 1 }`).

@@ -1,0 +1,51 @@
+:root {
+  --bg: #ffffff;
+  --ink: #1A1033;
+  --muted: rgba(26, 16, 51, .62);
+  --accent: #2a2db8;
+  --accent-ink: #ffffff;
+  --line: rgba(26, 16, 51, .18);
+  --pad: max(20px, env(safe-area-inset-left));
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink);
+  font-family: "Instrument Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overscroll-behavior: none; -webkit-user-select: none; user-select: none; }
+#stage, #stage canvas { position: fixed; inset: 0; display: block; touch-action: none; }
+
+.screen { position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: space-between;
+  padding: max(24px, env(safe-area-inset-top)) var(--pad) max(24px, env(safe-area-inset-bottom));
+  pointer-events: none; animation: in .5s ease both; }
+.screen[hidden] { display: none; }
+.screen button, .screen a { pointer-events: auto; }
+@keyframes in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+h1, h2 { font-family: "Bricolage Grotesque", "Instrument Sans", sans-serif; font-weight: 800; letter-spacing: -.02em; margin: 0; }
+h1 { font-size: clamp(36px, 11vw, 56px); line-height: .95; }
+h2 { font-size: clamp(26px, 8vw, 38px); line-height: 1; }
+p { margin: .7em 0 0; font-size: 16px; line-height: 1.4; color: var(--muted); max-width: 34ch; }
+
+.logo { width: 132px; height: 28px; margin: 4px auto 0; color: var(--ink); }
+.logo svg { width: 100%; height: 100%; display: block; }
+.top { text-align: center; }
+.top p { margin-left: auto; margin-right: auto; }
+.bottom { display: flex; flex-direction: column; gap: 10px; }
+#welcome .bottom h1, #welcome .bottom p { text-align: left; }
+#welcome .bottom p { margin-bottom: 14px; }
+
+.btn { font: 600 17px/1 "Instrument Sans", sans-serif; height: 56px; border-radius: 999px; border: 0; cursor: pointer;
+  width: 100%; transition: transform .15s ease, opacity .2s ease; }
+.btn:active { transform: scale(.98); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); }
+.btn.ghost { background: transparent; color: var(--ink); border: 1.5px solid var(--line); }
+.btn[disabled] { opacity: .5; }
+
+.hint { transition: opacity .4s ease; }
+body.touching .hint { opacity: 0; }
+.status { text-align: center; margin: 0 auto; min-height: 1.4em; font-weight: 600; color: var(--ink); }
+
+.traits { font-weight: 500; }
+.code { font: 800 clamp(40px, 13vw, 64px)/1 "Bricolage Grotesque", sans-serif; letter-spacing: .04em;
+  margin-top: 14px; color: var(--accent); }
+.tag { text-align: center; margin: 0 auto 6px; font-weight: 600; color: var(--ink); }

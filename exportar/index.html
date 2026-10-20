@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bioferia · Exportar</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    #stage { height: 100%; display: grid; place-items: center; }
+    #stage canvas { max-width: 100vw; max-height: 100vh; width: auto !important; height: auto !important; object-fit: contain; }
+  </style>
+</head>
+<body>
+  <main id="stage"></main>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+  <script src="../shared/config.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script src="../shared/pulse.js"></script>
+  <script src="../colectivo/js/render.js"></script>
+  <script src="../colectivo/js/trace.js"></script>
+  <script src="../colectivo/js/organism.js"></script>
+  <script src="export.js"></script>
+</body>
+</html>

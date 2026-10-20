@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bioferia · Sumar para conectar</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&display=swap">
+  <style>
+    html, body { margin: 0; height: 100%; background: #2b2b2b; overflow: hidden; }
+    main { height: 100%; display: grid; place-items: center; }
+    main canvas { max-width: 100vw; max-height: 100vh; width: auto !important; height: auto !important; }
+  </style>
+</head>
+<body>
+<main id="stage"></main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+<script>
+/* =========================================================================
+   TAGLINE 3D · "Sumar para conectar"  (16:9 · loop de 12 s)
+   El Colectivo es la suma de los tres subsistemas:
+     0–3 s    llegan los tres, cada uno con su color y su forma:
+              PULSO (lila, esfera que late y suelta ondas)
+              VÍNCULO (cian, anillo que tiende cordones hacia los otros)
+              IMPACTO (amarillo flúor, huella ovalada que deja círculos finos)
+     3–4 s    se suman: se funden y pasan al color del concepto (azul y violeta).
+     4–7.5 s  "sumar para conectar" en 3D; desde la frase salen ondas, un cordón
+              que la rodea y círculos finos (los tres gestos, ya en azul y violeta).
+     7.5–10.5 la frase se funde en el logo Bioferia, con partículas.
+     10.5–12  el logo se separa en los tres subsistemas → loop exacto.
+   Técnica: raymarching de campos de distancia (3D) + capa térmica 2D de la
+   familia (canales R/G/B = pulso/vínculo/impacto) con trama de puntos.
+   window.T = segundos fija un instante · exportMP4() guarda el video (con server.js).
+   ========================================================================= */
+const LOOP = 12;
+const CW = 1920, CH = 1080, ASPECT = CW / CH;
+const RANGE = 0.1;                 // alcance del campo de distancia (unidades: alto del cuadro = 1)
+const TEX_H = 640;                 // resolución de los campos de distancia
+const LQ = 0.5;                    // resolución de la capa térmica 2D
+
+// paleta del concepto general (calor 0 → 1): azul y violeta
+const RAMP = [
+  [0.00, '#ffffff'], [0.08, '#d9f1e0'], [0.17, '#22a45f'], [0.27, '#0f3f86'],
+  [0.4, '#2a2db8'], [0.55, '#7650d8'], [0.7, '#e49be4'], [0.85, '#f6d6f4'], [1.00, '#e2f7ff'],
+];
+
+const VERT = `
+precision highp float;
+attribute vec3 aPosition; attribute vec2 aTexCoord;
+uniform mat4 uModelViewMatrix, uProjectionMatrix;
+varying vec2 vUv;
+void main(){ vUv = aTexCoord; gl_Position = uProjectionMatrix * uModelViewMatrix * vec4(aPosition, 1.0); }`;
+
+const FRAG = `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D uText, uLogo, uRamp, uLayer;
+uniform float uAspect, uRange, uTime, uWB, uWT, uWL, uMelt, uMerge, uWave, uPart, uPh, uAcc, uGlitch, uK, uCell;
+uniform vec4 uB0, uB1, uB2;
+uniform vec2 uTexSize, uRes;
+
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float smin(float a, float b, float k){ float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
+mat2 rot(float a){ float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+float sdf2(sampler2D tex, vec2 xy){
+  vec2 uv = vec2(xy.x / uAspect + 0.5, 0.5 - xy.y);
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return uRange;
+  // 16 bits (R alto + G bajo) con interpolación bilineal manual: superficies lisas
+  vec2 px = uv * uTexSize - 0.5, f = fract(px), b = (floor(px) + 0.5) / uTexSize, o = 1.0 / uTexSize;
+  vec4 a = texture2D(tex, b), c = texture2D(tex, b + vec2(o.x, 0.0)), e = texture2D(tex, b + vec2(0.0, o.y)), g = texture2D(tex, b + o);
+  float va = (a.r * 255.0 * 256.0 + a.g * 255.0) / 65535.0, vc = (c.r * 255.0 * 256.0 + c.g * 255.0) / 65535.0;
+  float ve = (e.r * 255.0 * 256.0 + e.g * 255.0) / 65535.0, vg = (g.r * 255.0 * 256.0 + g.g * 255.0) / 65535.0;
+  float v = mix(mix(va, vc, f.x), mix(ve, vg, f.x), f.y);
+  return (v - 0.5) * 2.0 * uRange;
+}
+// globo inflado: el espesor crece hacia el centro de cada trazo (perfil redondo)
+float inflate(float d2, float z, float breath){
+  float di = d2 - 0.009;
+  float h = 0.1 * breath * sqrt(clamp(-di / 0.05, 0.0, 1.0));
+  vec2 w = vec2(di, abs(z) - h);
+  return (min(max(w.x, w.y), 0.0) + length(max(w, 0.0))) * 0.55;
+}
+
+/* ---- las tres formas: una por subsistema ---- */
+float sdTorus(vec3 p, vec2 t){ vec2 q = vec2(length(p.xz) - t.x, p.y); return length(q) - t.y; }
+float sdEll(vec3 p, vec3 r){ float k0 = length(p / r); float k1 = length(p / (r * r)); return k0 * (k0 - 1.0) / k1; }
+float dP(vec3 p){ return length(p - uB0.xyz) - uB0.w; }                       // PULSO: esfera que late
+float dV(vec3 p){                                                             // VÍNCULO: anillo
+  vec3 q = p - uB1.xyz;
+  q.yz = rot(1.25 + 0.25 * sin(uPh * 2.0)) * q.yz;
+  q.xy = rot(0.4 * sin(uPh)) * q.xy;
+  return sdTorus(q, vec2(uB1.w * 0.95, uB1.w * 0.36));
+}
+float dI(vec3 p){                                                             // IMPACTO: huella ovalada
+  vec3 q = p - uB2.xyz;
+  q.xy = rot(-0.35) * q.xy;
+  return sdEll(q, vec3(0.62, 1.2, 0.42) * uB2.w);
+}
+float blobs(vec3 p){ return smin(smin(dP(p), dV(p), uK), dI(p), uK); }
+
+float base(vec3 p){
+  float d = 0.0;
+  float wsum = uWT + uWL;
+  if (wsum > 0.001) {
+    vec2 q = p.xy + vec2(0.0, 0.012 * sin(p.x * 5.0 - uPh * 2.0) + 0.006 * sin(p.x * 11.0 + uPh * 3.0));
+    float breath = 1.0 + 0.18 * sin(p.x * 4.0 - uPh * 3.0) + 0.08 * sin(uPh * 2.0);
+    if (uWT > 0.001) d += uWT * inflate(sdf2(uText, q), p.z, breath);
+    if (uWL > 0.001) d += uWL * inflate(sdf2(uLogo, q), p.z, breath);
+    d = d / wsum + (1.0 - wsum) * 0.12;
+  } else d = 1.0;
+  return d;
+}
+// partículas: pequeños globos que salen del logo al armarse y se alejan achicándose
+float parts(vec3 p){
+  float d = 1.0;
+  for (int i = 0; i < 14; i++) {
+    float fi = float(i);
+    float h1 = fract(sin(fi * 12.9898) * 43758.5453), h2 = fract(sin(fi * 78.233) * 12345.678), h3 = fract(sin(fi * 37.719) * 9876.54);
+    float k = clamp(uPart * (1.1 + h3 * 0.6) - h3 * 0.35, 0.0, 1.0);
+    vec3 s = vec3((h1 - 0.5) * 0.85, (h2 - 0.5) * 0.12, 0.0);
+    vec3 dir = normalize(vec3(s.x * 0.6 + (h2 - 0.5) * 0.4, (h2 - 0.5) * 1.2 + (h1 - 0.5) * 0.5, (h3 - 0.5) * 0.8));
+    vec3 c = s + dir * k * (0.22 + h1 * 0.18);
+    float r = (0.012 + h3 * 0.016) * sin(3.14159 * k);
+    d = min(d, length(p - c) - r);
+  }
+  return d;
+}
+float map(vec3 p){
+  float d = base(p);
+  if (uPart > 0.001) d = smin(d, parts(p), 0.025);
+  return d + uMelt * 0.02 * smoothstep(0.07, 0.0, d) * sin(p.x * 31.0 + uTime * 2.0) * sin(p.y * 27.0 - uTime * 1.6) * sin(p.z * 23.0 + 1.3);
+}
+vec3 calcN(vec3 p){
+  const vec2 e = vec2(1.0, -1.0) * 0.0025;
+  return normalize(e.xyy * map(p + e.xyy) + e.yyx * map(p + e.yyx) + e.yxy * map(p + e.yxy) + e.xxx * map(p + e.xxx));
+}
+vec3 ramp(float h){ return texture2D(uRamp, vec2(clamp(h, 0.0, 1.0), 0.5)).rgb; }
+
+// color de acento de cada subsistema (f: 0 = profundo → 1 = brillo)
+vec3 accent(int i, float f){
+  vec3 dp = vec3(0.60, 0.17, 0.88), lp = vec3(0.94, 0.53, 0.91), hp = vec3(1.0, 0.92, 1.0);   // pulso: lila
+  vec3 dv = vec3(0.11, 0.17, 0.66), lv = vec3(0.13, 0.78, 0.94), hv = vec3(0.84, 1.0, 1.0);   // vínculo: cian
+  vec3 di = vec3(0.13, 0.62, 0.32), li = vec3(0.90, 1.0, 0.0),  hi = vec3(0.98, 1.0, 0.77);  // impacto: amarillo flúor
+  vec3 d = i == 0 ? dp : (i == 1 ? dv : di);
+  vec3 l = i == 0 ? lp : (i == 1 ? lv : li);
+  vec3 h = i == 0 ? hp : (i == 1 ? hv : hi);
+  return mix(mix(d, l, smoothstep(0.0, 0.75, f)), h, smoothstep(0.8, 1.0, f));
+}
+vec3 accentMix(vec3 w, float f){
+  return (accent(0, f) * w.x + accent(1, f) * w.y + accent(2, f) * w.z) / max(w.x + w.y + w.z, 1e-4);
+}
+// capa térmica 2D: devuelve color y calor total
+vec3 layerColor(vec2 uv, out float H){
+  vec3 L = texture2D(uLayer, uv).rgb;
+  float S = L.r + L.g + L.b;
+  H = 1.0 - exp(-S * 1.7);
+  vec3 conceptC = mix(vec3(1.0), ramp(0.3 + 0.28 * H), smoothstep(0.0, 0.3, H));   // azul → violeta
+  vec3 accC = mix(vec3(1.0), accentMix(L, 0.3 + 0.7 * H), smoothstep(0.0, 0.35, H));
+  return mix(conceptC, accC, uAcc);
+}
+
+void main(){
+  vec2 uv = vUv;
+  // glitch: algunas filas se corren en los momentos clave (encuentro y logo)
+  float fr = floor(uTime * 24.0), row = floor(uv.y * 70.0);
+  uv.x += uGlitch * (hash(vec2(row, fr)) - 0.5) * 0.05 * step(0.82, hash(vec2(row * 1.7, fr + 3.0)));
+
+  vec2 sp = vec2((uv.x - 0.5) * uAspect, 0.5 - uv.y);
+  vec3 ro = vec3(0.0, 0.0, 2.6);
+  vec3 rd = normalize(vec3(sp, -2.6));
+  float t = 1.9, d = 1.0;
+  bool hit = false;
+  for (int i = 0; i < 110; i++) {
+    vec3 p = ro + rd * t;
+    d = map(p);
+    if (d < 0.0008) { hit = true; break; }
+    t += max(d * 0.8, 0.0015);
+    if (t > 3.4) break;
+  }
+  float g = hash(gl_FragCoord.xy + fract(uTime) * 91.0) - 0.5;
+  vec3 col;
+  if (hit) {
+    vec3 p = ro + rd * t;
+    vec3 n = calcN(p);
+    float facing = clamp(dot(n, -rd), 0.0, 1.0);
+    float h = 0.27 + 0.42 * pow(facing, 2.0) + uMerge * 0.14
+            + 0.1 * sin(p.x * 11.0 + uTime * 0.9) * sin(p.y * 9.0 - uTime * 0.7);
+    h += uWave * exp(-pow((p.x - mix(-0.8, 0.8, fract(uTime / 3.0))) / 0.12, 2.0)) * 0.25;
+    col = ramp(h + g * 0.04);
+    // separados: cada forma con su color; al conectarse pasan al azul y violeta
+    if (uAcc * uWB > 0.001) {
+      vec3 w = vec3(exp(-max(dP(p), 0.0) * 60.0), exp(-max(dV(p), 0.0) * 60.0), exp(-max(dI(p), 0.0) * 60.0));
+      col = mix(col, accentMix(w, 0.25 + 0.75 * pow(facing, 1.5) + g * 0.04), uAcc * uWB);
+    }
+    vec3 L = normalize(vec3(-0.5, 0.6, 0.8));
+    float diff = clamp(dot(n, L), 0.0, 1.0);
+    float spec = pow(clamp(dot(reflect(-L, n), -rd), 0.0, 1.0), 28.0);
+    col *= 0.8 + 0.3 * diff;
+    col += spec * 0.35;
+  } else {
+    // halo térmico alrededor de las formas
+    vec3 p0 = ro + rd * (-ro.z / rd.z);
+    float dz = max(base(p0), 0.0);
+    float cut = 0.055;
+    float halo = clamp((exp(-dz * 16.0) - exp(-cut * 16.0)) / (1.0 - exp(-cut * 16.0)), 0.0, 1.0);
+    vec3 haloC = ramp(0.05 + 0.11 * pow(halo, 1.4));
+    if (uAcc * uWB > 0.001) {
+      vec3 w = vec3(exp(-max(dP(p0), 0.0) * 25.0), exp(-max(dV(p0), 0.0) * 25.0), exp(-max(dI(p0), 0.0) * 25.0));
+      haloC = mix(haloC, mix(vec3(1.0), accentMix(w, 0.55), 0.55), uAcc * uWB);
+    }
+    col = mix(ramp(0.0), haloC, smoothstep(0.0, 0.9, halo) * 0.55);
+
+    // capa térmica 2D (ondas, cordones, círculos), con trama de puntos donde se apaga
+    float H;
+    vec3 lc = layerColor(uv, H);
+    float a = 0.4, ca = cos(a), sa = sin(a);
+    vec2 px = uv * uRes;
+    vec2 r = vec2(ca * px.x - sa * px.y, sa * px.x + ca * px.y);
+    vec2 cell = (floor(r / uCell) + 0.5) * uCell, f = fract(r / uCell) - 0.5;
+    vec2 cp = vec2(ca * cell.x + sa * cell.y, -sa * cell.x + ca * cell.y);
+    float Hc;
+    vec3 cc = layerColor(cp / uRes, Hc);
+    float rad = sqrt(Hc) * 0.7;
+    float dotM = smoothstep(rad, rad - 0.12, length(f));
+    float dots = smoothstep(0.34, 0.1, H) * step(0.015, Hc);
+    col = mix(col, lc, smoothstep(0.04, 0.3, H) * (1.0 - dots));
+    col = mix(col, cc, dotM * dots);
+    // isolíneas sutiles
+    float bb = H * 7.0, fb = fract(bb), dd = min(fb, 1.0 - fb);
+    float line = (1.0 - smoothstep(0.01, 0.045, dd)) * smoothstep(0.3, 0.45, H);
+    col = mix(col, mix(vec3(0.85, 1.0, 0.25), vec3(0.6, 0.45, 1.0), 1.0 - uAcc * 0.0), line * 0.35);
+  }
+  col += g * 0.035 * (hit ? 1.0 : smoothstep(0.995, 0.9, col.g));
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+let sh, texText, texLogo, rampG, layer, lctx, ready = false;
+
+function setup() {
+  pixelDensity(1);
+  createCanvas(CW, CH, WEBGL).parent('stage');
+  sh = createShader(VERT, FRAG);
+  rampG = createGraphics(256, 1); rampG.pixelDensity(1);
+  const rc = rampG.drawingContext, gr = rc.createLinearGradient(0, 0, 256, 0);
+  RAMP.forEach(([p, c]) => gr.addColorStop(p, c));
+  rc.fillStyle = gr; rc.fillRect(0, 0, 256, 1);
+  layer = createGraphics(Math.round(CW * LQ), Math.round(CH * LQ)); layer.pixelDensity(1);
+  lctx = layer.drawingContext;
+  build();
+}
+
+/* ---------- campos de distancia de la frase y el logo ---------- */
+async function build() {
+  await document.fonts.load('800 100px "Bricolage Grotesque"');
+  const tw = Math.round(TEX_H * ASPECT), th = TEX_H;
+
+  // frase en dos líneas centradas (letras con cuerpo para inflarse), con margen de seguridad
+  texText = sdfTexture(tw, th, (c) => {
+    const lines = ['sumar para', 'conectar'];
+    let fs = th * 0.26;
+    c.font = `800 ${fs}px "Bricolage Grotesque"`;
+    const wMax = tw * 0.7, w = Math.max(...lines.map((l) => c.measureText(l).width));
+    if (w > wMax) { fs *= wMax / w; c.font = `800 ${fs}px "Bricolage Grotesque"`; }
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    const lh = fs * 0.98;
+    lines.forEach((l, i) => c.fillText(l, tw / 2, th / 2 + (i - 0.5) * lh + fs * 0.04));
+  });
+
+  // logo: los paths del SVG de marca
+  const svg = await (await fetch('../assets/bioferia-logo.svg')).text();
+  const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+  const vb = doc.documentElement.getAttribute('viewBox').split(/\s+/).map(Number);
+  const paths = [...doc.querySelectorAll('path')].map((p) => new Path2D(p.getAttribute('d')));
+  texLogo = sdfTexture(tw, th, (c) => {
+    const s = Math.min((tw * 0.62) / vb[2], (th * 0.5) / vb[3]);
+    c.translate(tw / 2 - (vb[2] * s) / 2, th / 2 - (vb[3] * s) / 2);
+    c.scale(s, s);
+    paths.forEach((p) => c.fill(p));
+  });
+  ready = true;
+}
+
+function sdfTexture(w, h, drawFn) {
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const c = cv.getContext('2d', { willReadFrequently: true });
+  c.fillStyle = '#000'; c.fillRect(0, 0, w, h);
+  c.fillStyle = '#fff';
+  drawFn(c);
+  const a = c.getImageData(0, 0, w, h).data, N = w * h, INF = 1e20;
+  const inside = new Float64Array(N), outside = new Float64Array(N);
+  for (let i = 0; i < N; i++) { const on = a[i * 4] > 127; outside[i] = on ? 0 : INF; inside[i] = on ? INF : 0; }
+  edt(outside, w, h); edt(inside, w, h);
+  const sd = new Float32Array(N);
+  for (let i = 0; i < N; i++) sd[i] = Math.sqrt(outside[i]) - Math.sqrt(inside[i]);
+  boxBlur(sd, w, h, Math.round(h * 0.008)); boxBlur(sd, w, h, Math.round(h * 0.008)); boxBlur(sd, w, h, Math.round(h * 0.008));
+  const g = createGraphics(w, h); g.pixelDensity(1);
+  const img = g.drawingContext.createImageData(w, h);
+  for (let i = 0; i < N; i++) {
+    const v = Math.max(0, Math.min(65535, Math.round(((sd[i] / h) / RANGE * 0.5 + 0.5) * 65535)));
+    img.data[i * 4] = v >> 8; img.data[i * 4 + 1] = v & 255; img.data[i * 4 + 2] = 0; img.data[i * 4 + 3] = 255;
+  }
+  g.drawingContext.putImageData(img, 0, 0);
+  _renderer.getTexture(g).setInterpolation(NEAREST, NEAREST);
+  return g;
+}
+function boxBlur(a, w, h, r) {
+  const tmp = new Float32Array(a.length), k = 1 / (2 * r + 1);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let s = 0; for (let j = -r; j <= r; j++) s += a[y * w + Math.min(w - 1, Math.max(0, x + j))]; tmp[y * w + x] = s * k;
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let s = 0; for (let j = -r; j <= r; j++) s += tmp[Math.min(h - 1, Math.max(0, y + j)) * w + x]; a[y * w + x] = s * k;
+  }
+}
+function edt(grid, w, h) {
+  const n = Math.max(w, h), f = new Float64Array(n), d = new Float64Array(n), v = new Int32Array(n), z = new Float64Array(n + 1);
+  for (let x = 0; x < w; x++) { for (let y = 0; y < h; y++) f[y] = grid[y * w + x]; dt1(f, h, d, v, z); for (let y = 0; y < h; y++) grid[y * w + x] = d[y]; }
+  for (let y = 0; y < h; y++) { for (let x = 0; x < w; x++) f[x] = grid[y * w + x]; dt1(f, w, d, v, z); for (let x = 0; x < w; x++) grid[y * w + x] = d[x]; }
+}
+function dt1(f, n, d, v, z) {
+  let k = 0; v[0] = 0; z[0] = -1e20; z[1] = 1e20;
+  for (let q = 1; q < n; q++) {
+    let s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+    while (s <= z[k]) { k--; s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]); }
+    k++; v[k] = q; z[k] = s; z[k + 1] = 1e20;
+  }
+  k = 0;
+  for (let q = 0; q < n; q++) { while (z[k + 1] < q) k++; d[q] = (q - v[k]) * (q - v[k]) + f[v[k]]; }
+}
+
+/* ---------- utilidades ---------- */
+const TAU = Math.PI * 2;
+const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const bump = (a, b, x) => (x <= a || x >= b ? 0 : Math.sin(Math.PI * (x - a) / (b - a)));
+const mod = (a, n) => ((a % n) + n) % n;
+const gauss = (x, c, w) => { const q = (x - c) / w; return Math.exp(-q * q); };
+const rnd = (n) => { const v = Math.sin(n * 12.9898) * 43758.5453; return v - Math.floor(v); };
+// canal de la capa: 0 pulso (R) · 1 vínculo (G) · 2 impacto (B) · 3 concepto (los tres)
+function ch(i, v) {
+  const q = Math.round(255 * Math.min(1, Math.max(0, i === 3 ? v / 3 : v)));
+  return i === 0 ? `rgb(${q},0,0)` : i === 1 ? `rgb(0,${q},0)` : i === 2 ? `rgb(0,0,${q})` : `rgb(${q},${q},${q})`;
+}
+function wobblyEllipse(c, x, y, rx, ry, seed, t, a0 = 0, a1 = TAU) {
+  c.beginPath();
+  const N = 120;
+  for (let i = 0; i <= N; i++) {
+    const a = a0 + (a1 - a0) * (i / N);
+    const w = 1 + 0.04 * Math.sin(a * 3 + seed + t * 1.3) + 0.02 * Math.sin(a * 7 - seed * 2 + t * 1.9);
+    const px = x + Math.cos(a) * rx * w, py = y + Math.sin(a) * ry * w;
+    i ? c.lineTo(px, py) : c.moveTo(px, py);
+  }
+}
+
+/* ---------- la capa térmica 2D: los gestos de cada subsistema ---------- */
+function drawLayer(t, p, ph, B, sep, wT, wL) {
+  const c = lctx, W = layer.width, H = layer.height, S = H;
+  const X = (x) => (x / ASPECT + 0.5) * W, Y = (y) => (0.5 - y) * H;
+  c.globalCompositeOperation = 'source-over'; c.filter = 'none';
+  c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
+  c.globalCompositeOperation = 'lighter';
+  c.lineCap = 'round'; c.lineJoin = 'round';
+  const a1 = sep * (1 - wT);                       // los subsistemas se expresan mientras están separados
+  const P = [X(B[0][0]), Y(B[0][1])], V = [X(B[1][0]), Y(B[1][1])], I = [X(B[2][0]), Y(B[2][1])];
+
+  if (a1 > 0.01) {
+    const hbt = (lt) => gauss(lt, 0, 0.05) + 0.7 * gauss(lt, 0.18, 0.05);
+    const q6 = mod(t, 2), hb = hbt(q6);
+
+    // PULSO (lila): un punto que late sobre una línea de electrocardiograma, con ondas
+    c.filter = `blur(${S * 0.004}px)`;
+    c.strokeStyle = ch(0, 0.55 * a1); c.lineWidth = S * 0.008;
+    c.beginPath();
+    for (let k = -60; k <= 60; k++) {
+      const u = k / 60, x = P[0] + u * S * 0.42;
+      const yy = P[1] - S * (0.3 * gauss(u, 0, 0.03) - 0.09 * gauss(u, 0.07, 0.03) + 0.05 * gauss(u, -0.32, 0.08) + 0.06 * gauss(u, 0.4, 0.09)) * (0.6 + 0.6 * hb);
+      k === -60 ? c.moveTo(x, yy) : c.lineTo(x, yy);
+    }
+    c.stroke();
+    c.filter = `blur(${S * 0.018}px)`;
+    const pg = c.createRadialGradient(P[0], P[1], 0, P[0], P[1], S * (0.07 + 0.04 * hb));
+    pg.addColorStop(0, ch(0, (0.6 + 0.6 * hb) * a1)); pg.addColorStop(1, 'rgb(0,0,0)');
+    c.fillStyle = pg; c.beginPath(); c.arc(P[0], P[1], S * (0.07 + 0.04 * hb), 0, TAU); c.fill();
+    c.filter = `blur(${S * 0.006}px)`;
+    for (let j = 0; j < 3; j++) {
+      const lt = mod(q6 - j * 0.18, 2);
+      if (lt > 1.6) continue;
+      c.strokeStyle = ch(0, 0.5 * Math.exp(-lt * 1.5) * a1);
+      c.lineWidth = S * 0.009;
+      wobblyEllipse(c, P[0], P[1], S * (0.08 + lt * 0.2), S * (0.08 + lt * 0.18), j, lt); c.stroke();
+    }
+
+    // VÍNCULO (cian): un cordón que hace un lazo y tiende hilos con cuentas hacia los otros
+    c.filter = `blur(${S * 0.004}px)`;
+    c.strokeStyle = ch(1, 0.6 * a1); c.lineWidth = S * 0.009;
+    c.beginPath();
+    for (let k = 0; k <= 140; k++) {                  // lazo enrollado (tres vueltas que se desplazan)
+      const u = k / 140, ang = u * TAU * 3 + ph;
+      const rx = S * (0.06 + 0.02 * Math.sin(u * 9 + ph * 2)), ox = (u - 0.5) * S * 0.16;
+      const x = V[0] + ox + Math.cos(ang) * rx, yy = V[1] + Math.sin(ang) * rx * 1.25;
+      k ? c.lineTo(x, yy) : c.moveTo(x, yy);
+    }
+    c.stroke();
+    [P, I].forEach((T, k) => {
+      const mx = (V[0] + T[0]) / 2, my = (V[1] + T[1]) / 2, dx = T[0] - V[0], dy = T[1] - V[1];
+      const bend = Math.sin(ph * 2 + k * 2) * 0.25;
+      const cx = mx - dy * bend, cy = my + dx * bend + S * 0.04;
+      c.strokeStyle = ch(1, 0.4 * a1); c.lineWidth = S * 0.006;
+      c.beginPath(); c.moveTo(V[0], V[1]); c.quadraticCurveTo(cx, cy, T[0], T[1]); c.stroke();
+      for (let bb = 0; bb < 5; bb++) {
+        const u = mod(t / 2 + bb / 5 + k * 0.1, 1), v = 1 - u;
+        const bx = v * v * V[0] + 2 * v * u * cx + u * u * T[0], by = v * v * V[1] + 2 * v * u * cy + u * u * T[1];
+        c.fillStyle = ch(1, 0.6 * Math.sin(Math.PI * u) * a1);
+        c.beginPath(); c.arc(bx, by, S * 0.009, 0, TAU); c.fill();
+      }
+    });
+
+    // IMPACTO (amarillo): una huella de suela, con círculos finos que nacen alrededor
+    const stomp = mod(t - 0.8, 4), press = Math.exp(-stomp * 1.5);
+    c.save(); c.translate(I[0], I[1]); c.rotate(-0.3);
+    c.filter = `blur(${S * 0.012}px)`;
+    c.fillStyle = ch(2, (0.45 + 0.4 * press) * a1);
+    c.beginPath();
+    c.ellipse(0, -S * 0.05, S * 0.055, S * 0.085, 0, 0, TAU);
+    c.ellipse(S * 0.004, S * 0.06, S * 0.042, S * 0.06, 0, 0, TAU);
+    c.ellipse(0, S * 0.12, S * 0.045, S * 0.05, 0, 0, TAU);
+    c.fill();
+    c.restore();
+    c.filter = `blur(${S * 0.0015}px)`;
+    c.lineWidth = S * 0.004;
+    for (let j = 0; j < 7; j++) {
+      const age = mod(t - rnd(j + 3) * 2, 2);
+      const ox = I[0] + (rnd(j) - 0.5) * S * 0.24, oy = I[1] + (rnd(j + 9) - 0.5) * S * 0.26;
+      c.strokeStyle = ch(2, 0.5 * Math.exp(-age * 1.1) * sm(0, 0.15, age) * a1);
+      c.beginPath(); c.arc(ox, oy, S * (0.03 + age * 0.15), 0, TAU); c.stroke();
+    }
+  }
+
+  // la suma: al juntarse, una mancha térmica en el centro (ya azul y violeta) de la que nace la frase
+  const m = (1 - sep) * (1 - sm(0.36, 0.44, p)) * (p < 0.5 ? 1 : 0);
+  if (m > 0.01) {
+    c.filter = `blur(${S * 0.03}px)`;
+    const R = S * (0.12 + 0.2 * m);
+    const mg = c.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, R);
+    mg.addColorStop(0, ch(3, 1.1 * m)); mg.addColorStop(1, 'rgb(0,0,0)');
+    c.fillStyle = mg; c.beginPath(); c.ellipse(W / 2, H / 2, R * 1.5, R, 0, 0, TAU); c.fill();
+  }
+
+  // ya conectados: desde la frase salen los tres gestos, en el color del concepto
+  const a2 = wT;
+  if (a2 > 0.01) {
+    const cx = W / 2, cy = H / 2;
+    // ondas que respiran desde la palabra (3 por loop de 4 s → loop exacto)
+    c.filter = `blur(${S * 0.006}px)`;
+    for (let j = 0; j < 3; j++) {
+      const k = mod(t / 4 + j / 3, 1);
+      c.strokeStyle = ch(3, 0.32 * Math.sin(Math.PI * k) * a2);
+      c.lineWidth = S * 0.01;
+      wobblyEllipse(c, cx, cy, W * (0.36 + 0.12 * k), H * (0.3 + 0.15 * k), j * 3, t); c.stroke();
+    }
+    // cordón que rodea la frase, con cuentas que viajan
+    c.filter = `blur(${S * 0.003}px)`;
+    const aStart = ph * 2, aEnd = aStart + TAU * 0.72;
+    c.strokeStyle = ch(3, 0.26 * a2); c.lineWidth = S * 0.006;
+    wobblyEllipse(c, cx, cy, W * 0.405, H * 0.37, 7, t, aStart, aEnd); c.stroke();
+    for (let b = 0; b < 7; b++) {
+      const a = aStart + (aEnd - aStart) * mod(t / 3 + b / 7, 1);
+      c.fillStyle = ch(3, 0.36 * a2);
+      c.beginPath(); c.arc(cx + Math.cos(a) * W * 0.405, cy + Math.sin(a) * H * 0.37, S * 0.008, 0, TAU); c.fill();
+    }
+    // círculos finos que nacen en el borde de la frase y se expanden
+    c.filter = `blur(${S * 0.0015}px)`;
+    c.lineWidth = S * 0.004;
+    for (let j = 0; j < 9; j++) {
+      const age = mod(t - rnd(j + 20) * 3, 3);
+      const ang = rnd(j + 40) * TAU;
+      const ox = cx + Math.cos(ang) * W * 0.32, oy = cy + Math.sin(ang) * H * 0.24;
+      c.strokeStyle = ch(3, 0.3 * Math.exp(-age * 0.9) * sm(0, 0.2, age) * a2);
+      c.beginPath(); c.arc(ox, oy, S * (0.02 + age * 0.08), 0, TAU); c.stroke();
+    }
+  }
+  c.filter = 'none';
+}
+
+/* ---------- línea de tiempo ---------- */
+function draw() {
+  if (!ready) { background(255); return; }
+  const t = mod(window.T != null ? window.T : millis() / 1000, LOOP), p = t / LOOP, ph = p * TAU;
+
+  // pesos: subsistemas → frase → logo → subsistemas
+  const wT = sm(0.3, 0.4, p) * (1 - sm(0.62, 0.7, p));
+  const wL = sm(0.62, 0.7, p) * (1 - sm(0.88, 0.98, p));
+  const wB = Math.max(0, 1 - wT - wL);
+  const melt = bump(0.3, 0.4, p) + bump(0.62, 0.7, p) + bump(0.88, 1.0, p);
+  // separación (1 = separados) y color de acento (1 = cada uno su color, 0 = azul y violeta)
+  const sep = p < 0.5 ? 1 - sm(0.14, 0.32, p) : sm(0.88, 1.0, p);
+  const acc = p < 0.5 ? 1 - sm(0.22, 0.34, p) : sm(0.9, 1.0, p);
+
+  // los tres subsistemas alrededor del centro (frecuencias enteras = loop exacto)
+  const q = mod(p * 6, 1), hb = gauss(q, 0.05, 0.025) + 0.7 * gauss(q, 0.15, 0.025);   // latido de Pulso
+  const sizes = [0.1 * (1 + 0.14 * hb), 0.1, 0.11];
+  const B = sizes.map((r, i) => {
+    const a = (i * TAU) / 3 + 0.5 + 0.35 * Math.sin(ph);
+    const rr = sep * 0.28;
+    return [Math.cos(a) * rr * 1.35, Math.sin(a) * rr * 0.85, Math.sin(ph * 2 + i) * 0.03 * sep,
+            r * (1 + 0.45 * (1 - sep))];
+  });
+
+  drawLayer(t, p, ph, B, sep, wT, wL);
+
+  shader(sh);
+  sh.setUniform('uText', texText);
+  sh.setUniform('uLogo', texLogo);
+  sh.setUniform('uRamp', rampG);
+  sh.setUniform('uLayer', layer);
+  sh.setUniform('uAspect', ASPECT);
+  sh.setUniform('uRange', RANGE);
+  sh.setUniform('uTexSize', [texText.width, texText.height]);
+  sh.setUniform('uRes', [CW, CH]);
+  sh.setUniform('uCell', CH / 95);
+  sh.setUniform('uTime', t);
+  sh.setUniform('uPh', ph);
+  sh.setUniform('uWB', 0.0); sh.setUniform('uWT', wT); sh.setUniform('uWL', wL);
+  sh.setUniform('uMelt', melt);
+  sh.setUniform('uMerge', (1 - sep) * wB + 0.5 * (wT + wL));
+  sh.setUniform('uWave', wT + wL * 0.6);
+  sh.setUniform('uAcc', acc);
+  sh.setUniform('uK', 0.09 + 0.12 * (1 - sep));
+  sh.setUniform('uGlitch', Math.min(1, gauss(p, 0.3, 0.012) + 0.7 * gauss(p, 0.64, 0.01)));
+  sh.setUniform('uPart', 0.0);
+  sh.setUniform('uB0', B[0]); sh.setUniform('uB1', B[1]); sh.setUniform('uB2', B[2]);
+  noStroke();
+  rect(-width / 2, -height / 2, width, height);
+}
+
+/* ---------- exportar MP4 (requiere node server.js) ---------- */
+async function exportMP4(name = 'tagline-3d-sumar-para-conectar-1920x1080.mp4', fps = 30) {
+  const { Muxer, ArrayBufferTarget } = await import('https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/+esm');
+  const muxer = new Muxer({ target: new ArrayBufferTarget(), video: { codec: 'avc', width: CW, height: CH }, fastStart: 'in-memory' });
+  const enc = new VideoEncoder({ output: (c, m) => muxer.addVideoChunk(c, m), error: (e) => console.error(e) });
+  enc.configure({ codec: 'avc1.640028', width: CW, height: CH, bitrate: 22e6, framerate: fps });
+  const copy = document.createElement('canvas'); copy.width = CW; copy.height = CH;
+  const c = copy.getContext('2d'), gl = drawingContext.canvas, total = LOOP * fps;
+  noLoop();
+  for (let f = 0; f < total; f++) {
+    window.T = f / fps; redraw(); c.drawImage(gl, 0, 0);
+    const vf = new VideoFrame(copy, { timestamp: Math.round((f * 1e6) / fps), duration: Math.round(1e6 / fps) });
+    enc.encode(vf, { keyFrame: f % fps === 0 }); vf.close();
+    if (enc.encodeQueueSize > 6) await new Promise((r) => setTimeout(r, 0));
+  }
+  await enc.flush(); muxer.finalize();
+  await fetch('/export?name=' + encodeURIComponent(name), { method: 'POST', body: new Blob([muxer.target.buffer], { type: 'video/mp4' }) });
+  window.T = null; loop();
+  return name;
+}
+</script>
+</body>
+</html>

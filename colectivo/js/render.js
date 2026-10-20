@@ -147,7 +147,7 @@ class HeatRenderer {
     // glow
     const g = this.gctx;
     g.globalCompositeOperation = 'copy';
-    if (this.canFilter) g.filter = `blur(${CONFIG.glowBlur}px)`;
+    if (this.canFilter) g.filter = `blur(${CONFIG.glowBlur * Math.max(1, W.S)}px)`;   // escala con la resolución
     g.drawImage(this.heat.elt, 0, 0, this.glow.width, this.glow.height);
     if (this.canFilter) g.filter = 'none';
 

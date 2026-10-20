@@ -2,36 +2,65 @@
 <html lang="es">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Bioferia · Pulso</title>
-  <style>
-    :root { --bg: #F4F3EE; --ink: #1A1033; --muted: rgba(26,16,51,.55); }
-    body { margin: 0; min-height: 100svh; display: grid; place-items: center; text-align: center; padding: 24px 16px;
-      background: var(--bg); color: var(--ink); font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-    h1 { font-size: 26px; letter-spacing: -.02em; margin: 0 0 8px; font-weight: 600; }
-    p { color: var(--muted); margin: 0 0 28px; line-height: 1.45; }
-    button { font: inherit; font-weight: 600; padding: 14px 26px; border-radius: 99px; border: 0; background: #7B3FF2; color: #fff; }
-    #ok { margin-top: 16px; min-height: 1.4em; color: #00A859; }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#ffffff">
+  <title>Bioferia · Tu pulso</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700..800&family=Instrument+Sans:wght@400..600&display=swap">
+  <link rel="stylesheet" href="pulso.css">
 </head>
-<body>
-  <main>
-    <h1>Todo comienza con un pulso</h1>
-    <p>La interfaz táctil llega en la etapa 2.<br>Por ahora podés enviar un pulso de prueba<br>a la pantalla colectiva abierta en otra pestaña.</p>
-    <button id="send">Sumar al colectivo</button>
-    <div id="ok"></div>
-  </main>
-  <script src="../shared/config.js"></script>
+<body data-screen="welcome">
+  <main id="stage"></main>
+
+  <!-- 1 · Bienvenida -->
+  <section class="screen" id="welcome">
+    <div class="logo" aria-label="Bioferia"></div>
+    <div class="bottom">
+      <h1>Todo comienza<br>con un pulso</h1>
+      <p>Mantené presionada la pantalla y mové el dedo. Tu gesto crea una forma única que se va a sumar al organismo colectivo.</p>
+      <button class="btn primary" data-go="create">Crear mi pulso</button>
+    </div>
+  </section>
+
+  <!-- 2 · Creación -->
+  <section class="screen" id="create" hidden>
+    <div class="top hint">
+      <h2>Mantené presionado<br>y mové el dedo</h2>
+      <p>Cada toque suma un latido</p>
+    </div>
+    <p class="status" aria-live="polite"></p>
+  </section>
+
+  <!-- 3 · Vista previa -->
+  <section class="screen" id="preview" hidden>
+    <div class="top">
+      <h2>Este es tu pulso</h2>
+      <p class="traits"></p>
+    </div>
+    <div class="bottom">
+      <button class="btn primary" data-act="send">Sumar al colectivo</button>
+      <button class="btn ghost" data-go="create">Volver a crear</button>
+    </div>
+  </section>
+
+  <!-- 4 · Confirmación -->
+  <section class="screen" id="sent" hidden>
+    <div class="top">
+      <h2>Tu pulso ya forma parte de algo más grande</h2>
+      <p>Buscalo en la pantalla del organismo con este código:</p>
+      <div class="code"></div>
+    </div>
+    <div class="bottom">
+      <p class="tag">#SumarParaConectar</p>
+      <button class="btn ghost" data-go="create">Crear otro pulso</button>
+    </div>
+  </section>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
   <script src="../shared/utils.js"></script>
   <script src="../shared/pulse.js"></script>
   <script src="../shared/bus.js"></script>
-  <script>
-    document.getElementById('send').onclick = async () => {
-      await PulseBus.send(Pulse.simulate());
-      const ok = document.getElementById('ok');
-      ok.textContent = 'Tu pulso ya es parte del colectivo';
-      setTimeout(() => (ok.textContent = ''), 2500);
-    };
-  </script>
+  <script src="pulso.js"></script>
 </body>
 </html>

@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bioferia · Vínculo</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&display=swap">
+  <style>
+    html, body { margin: 0; height: 100%; background: #2b2b2b; overflow: hidden; }
+    main { height: 100%; display: grid; place-items: center; }
+    main canvas { max-width: 100vw; max-height: 100vh; width: auto !important; height: auto !important; }
+  </style>
+</head>
+<body>
+<main id="stage"></main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+<script>
+/* =========================================================================
+   VÍNCULO · "el tacto que queda"   (16:9 · loop de 12 s)
+   Misma familia que Pulso (calor + estela + trama + isolíneas + grano).
+     0–6 s   dos manos entran desde bordes opuestos, unidas por un cordón con
+             cuentas que viajan (la señal de uno a otro, como un sifonóforo).
+     6 s     el contacto: el cordón se tensa, se enrolla y se trenza.
+     8.5–11.5 mientras las manos se retiran, queda escrita la palabra.
+     12 s    el cordón se afloja → vuelve al inicio (loop exacto).
+   window.T = segundos fija un instante · exportMP4() guarda el video (con server.js).
+   ========================================================================= */
+const LOOP = 12;
+const CW = 1920, CH = 1080;
+const Q = 0.5;
+
+// mapa térmico de Vínculo: blanco → celestes → azul de cuerpo → rosa (reflejo) → cian flúor
+const RAMP = [
+  [0.00, '#ffffff'], [0.07, '#e9efff'], [0.18, '#b7c8ff'], [0.32, '#6f8cff'], [0.46, '#3b5bf2'],
+  [0.58, '#2a3fd6'], [0.66, '#1d2ba8'], [0.72, '#e874d8'], [0.79, '#22c8f0'], [0.88, '#3ff3ff'], [1.0, '#d6ffff'],
+];
+
+const VERT = `
+precision highp float;
+attribute vec3 aPosition; attribute vec2 aTexCoord;
+uniform mat4 uModelViewMatrix, uProjectionMatrix;
+varying vec2 vUv;
+void main(){ vUv = aTexCoord; gl_Position = uProjectionMatrix * uModelViewMatrix * vec4(aPosition, 1.0); }`;
+
+const FRAG = `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D uHeat, uRamp;
+uniform vec2 uRes;
+uniform float uTime, uCell, uGlitch;
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y); }
+vec3 ramp(float h){ return texture2D(uRamp, vec2(clamp(h, 0.0, 1.0), 0.5)).rgb; }
+float heatAt(vec2 uv){ return 1.0 - exp(-texture2D(uHeat, uv).r * 1.7); }
+void main(){
+  vec2 uv = vUv;
+  float fr = floor(uTime * 24.0), row = floor(uv.y * 70.0);
+  uv.x += uGlitch * (hash(vec2(row, fr)) - 0.5) * 0.05 * step(0.82, hash(vec2(row * 1.7, fr + 3.0)));
+  vec2 wp = uv * vec2(6.0, 3.4);
+  uv += (vec2(vnoise(wp + uTime * 0.35), vnoise(wp + 7.3 - uTime * 0.3)) - 0.5) * 0.022;
+  float h = heatAt(uv);
+  float g = hash(gl_FragCoord.xy + fract(uTime) * 91.0) - 0.5;
+
+  // trama de puntos para el calor que se apaga
+  float a = 0.4, ca = cos(a), sa = sin(a);
+  vec2 px = vec2(uv.x * uRes.x, uv.y * uRes.y);
+  vec2 r = vec2(ca * px.x - sa * px.y, sa * px.x + ca * px.y);
+  vec2 cell = (floor(r / uCell) + 0.5) * uCell, f = fract(r / uCell) - 0.5;
+  vec2 cp = vec2(ca * cell.x + sa * cell.y, -sa * cell.x + ca * cell.y);
+  float hc = heatAt(cp / uRes);
+  float rad = sqrt(hc) * 0.7;
+  float dotM = smoothstep(rad, rad - 0.12, length(f));
+  float dots = smoothstep(0.34, 0.1, h) * step(0.015, hc);
+
+  vec3 solid = ramp(h + g * 0.05);
+  vec3 dotCol = mix(ramp(0.0), ramp(clamp(0.22 + hc * 1.4, 0.0, 1.0)), dotM);
+  vec3 col = mix(solid, dotCol, dots);
+
+  // isolíneas sutiles (cian / rosa)
+  float b = h * 7.0, fb = fract(b), d = min(fb, 1.0 - fb);
+  float line = (1.0 - smoothstep(0.01, 0.045, d)) * smoothstep(0.3, 0.45, h);
+  col = mix(col, mod(floor(b + 0.5), 2.0) < 1.0 ? vec3(0.25, 0.95, 1.0) : vec3(1.0, 0.45, 0.85), line * 0.5);
+
+  col += g * 0.04 * smoothstep(0.0, 0.05, h + dots * hc);
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+let sh, heat, hctx, rampG, lastT = null;
+
+function setup() {
+  pixelDensity(1);
+  createCanvas(CW, CH, WEBGL).parent('stage');
+  document.fonts.load('800 100px "Bricolage Grotesque"');
+  sh = createShader(VERT, FRAG);
+  heat = createGraphics(Math.round(CW * Q), Math.round(CH * Q)); heat.pixelDensity(1);
+  hctx = heat.drawingContext;
+  hctx.fillStyle = '#000'; hctx.fillRect(0, 0, heat.width, heat.height);
+  rampG = createGraphics(256, 1); rampG.pixelDensity(1);
+  const rc = rampG.drawingContext, gr = rc.createLinearGradient(0, 0, 256, 0);
+  RAMP.forEach(([p, c]) => gr.addColorStop(p, c));
+  rc.fillStyle = gr; rc.fillRect(0, 0, 256, 1);
+}
+
+const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const mod = (a, n) => ((a % n) + n) % n;
+const gauss = (x, c, w) => { const q = (x - c) / w; return Math.exp(-q * q); };
+const TAU = Math.PI * 2;
+
+function heatRGB(v) { return `rgb(${Math.round(255 * Math.min(1, Math.max(0, v)))},0,0)`; }
+function limb(c, x1, y1, x2, y2, w, v) { c.strokeStyle = heatRGB(v); c.lineWidth = w; c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.stroke(); }
+function oval(c, x, y, rx, ry, rot, v) { c.fillStyle = heatRGB(v); c.beginPath(); c.ellipse(x, y, rx, ry, rot, 0, TAU); c.fill(); }
+function polyline(c, pts) { c.beginPath(); pts.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y))); }
+
+/* ---------- mano que entra desde un borde, como en "La creación de Adán" ----------
+   side -1 = izquierda (mano relajada, dedos caídos) · side 1 = derecha (señala con el índice)
+   Devuelve { tip: punta del índice, wrist: muñeca } para atar el cordón. */
+function hand(c, side, y, reach, S, W, ph, v) {
+  const dir = -side;                                        // hacia el centro
+  const wx = side < 0 ? -S * 0.12 + reach * W * 0.3 : W + S * 0.12 - reach * W * 0.3;
+  // antebrazo: entra desde fuera del cuadro y se afina hacia la muñeca
+  limb(c, wx - dir * S * 0.55, y + S * 0.05, wx - dir * S * 0.2, y + S * 0.02, S * 0.13, v * 0.8);
+  limb(c, wx - dir * S * 0.2, y + S * 0.02, wx, y, S * 0.1, v * 0.85);
+  // palma
+  oval(c, wx + dir * S * 0.07, y + S * 0.005, S * 0.085, S * 0.062, dir * 0.08, v);
+  const kx = wx + dir * S * 0.13;                           // línea de nudillos
+  const relax = side < 0;
+  // [desplazamiento vertical, largo, ancho, flexión por falange]
+  const F = relax
+    ? [[-0.04, 0.2, 0.034, 0.22], [-0.012, 0.21, 0.035, 0.32], [0.016, 0.19, 0.033, 0.4], [0.042, 0.15, 0.03, 0.48]]
+    : [[-0.04, 0.22, 0.035, 0.03], [-0.012, 0.15, 0.035, 0.95], [0.016, 0.14, 0.033, 1.0], [0.042, 0.12, 0.03, 1.05]];
+  let tip = [0, 0];
+  F.forEach(([oy, L, w, bend], i) => {
+    const breathe = 0.06 * Math.sin(ph * 2 + i * 0.8);
+    let a = dir > 0 ? 0 : Math.PI;
+    let x = kx, yy = y + oy * S;
+    const segs = [0.42, 0.33, 0.25];
+    segs.forEach((sl, j) => {
+      a += dir * (bend + breathe) * (j === 0 ? 0.5 : 1);    // dobla hacia abajo, más en las últimas falanges
+      const nx = x + Math.cos(a) * L * S * 1.3 * sl, ny = yy + Math.sin(a) * L * S * 1.3 * sl;
+      limb(c, x, yy, nx, ny, w * S * 1.15 * (1 - j * 0.12), v);
+      x = nx; yy = ny;
+    });
+    if (i === 0) tip = [x, yy];
+  });
+  // pulgar: sale de la base de la palma, hacia adelante y abajo
+  let ta = (dir > 0 ? 0 : Math.PI) + dir * 0.65, tx = wx + dir * S * 0.05, ty = y + S * 0.04;
+  [0.09, 0.07].forEach((L, j) => {
+    ta -= dir * 0.3 * j;
+    const nx = tx + Math.cos(ta) * L * S, ny = ty + Math.sin(ta) * L * S;
+    limb(c, tx, ty, nx, ny, S * 0.038, v);
+    tx = nx; ty = ny;
+  });
+  return { tip, wrist: [wx - dir * S * 0.03, y + S * 0.01] };
+}
+
+/* ---------- un cuadro de calor ---------- */
+function heatFrame(t) {
+  const W = heat.width, H = heat.height, S = H, c = hctx;
+  const p = t / LOOP, ph = p * TAU;
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.globalCompositeOperation = 'source-over'; c.filter = 'none';
+  c.fillStyle = 'rgba(0,0,0,0.13)'; c.fillRect(0, 0, W, H);
+  c.globalCompositeOperation = 'lighter';
+  c.lineCap = 'round'; c.lineJoin = 'round';
+
+  // tiras de fondo: cruzan todo el cuadro y se disuelven en trama
+  c.filter = `blur(${S * 0.04}px)`;
+  for (let i = 0; i < 3; i++) {
+    const pts = [];
+    for (let k = 0; k <= 40; k++) {
+      const x = (k / 40) * (W + S * 0.4) - S * 0.2;
+      pts.push([x, H * (0.22 + i * 0.3) + Math.sin((x / W) * TAU + ph + i * 2) * S * 0.12 + Math.sin(ph * 2 + i) * S * 0.04]);
+    }
+    c.strokeStyle = heatRGB(0.014); c.lineWidth = S * 0.1;
+    polyline(c, pts); c.stroke();
+  }
+
+  // las manos: se acercan hasta tocarse a los 6 s y se retiran (0 → 1 → 0)
+  const reachAt = (q) => { q = mod(q, 1); return sm(0.0, 0.3, q) * (1 - sm(0.78, 1.0, q)); };
+  const reach = reachAt(p);
+  c.filter = `blur(${S * 0.009}px)`;
+  const env = 0.024 * (1 - 0.75 * sm(0.36, 0.44, p) * (1 - sm(0.86, 0.96, p)));
+  const yl = H * 0.58 + Math.sin(ph * 2) * S * 0.03, yr = H * 0.42 + Math.sin(ph * 2 + 1) * S * 0.03;
+  let HA, HB;
+  for (let e = 1; e >= 0; e--) {                              // un eco del movimiento
+    const pe = ph - e * 0.05, re = reachAt(p - e * 0.008);
+    HA = hand(c, -1, yl, re, S, W, pe, env * (1 - e * 0.6));
+    HB = hand(c, 1, yr, re, S, W, pe, env * (1 - e * 0.6));
+  }
+  const A = HA.tip, B = HB.tip;
+
+  // el cordón: une las dos puntas, cuelga cuando están lejos y se tensa al tocarse
+  const tension = reach;
+  const braid = sm(0.35, 0.5, p) * (1 - sm(0.68, 0.85, p));
+  const N = 90, cord = [];
+  const dx = B[0] - A[0], dy = B[1] - A[1], dl = Math.hypot(dx, dy) || 1, nx = -dy / dl, ny = dx / dl;
+  for (let k = 0; k <= N; k++) {
+    const u = k / N, env2 = Math.sin(Math.PI * u);
+    const sag = env2 * S * 0.2 * (1 - tension);
+    const wave = Math.sin(u * Math.PI * 3 - ph * 2) * S * 0.07 * env2 * (1 - 0.6 * tension);
+    cord.push([A[0] + dx * u + nx * wave, A[1] + dy * u + ny * wave + sag]);
+  }
+  // cuando aparece la palabra, el cordón le da la vuelta: sale de una mano,
+  // rodea "VINCULO" (algo más de una vuelta) y llega a la otra
+  // el lazo se dibuja de mano a mano (draw) y después se apaga (fade); el cordón suelto se desvanece
+  const draw = sm(0.31, 0.43, p), fade = 1 - sm(0.86, 0.97, p), around = draw * fade;
+  const loopPath = [];
+  if (around > 0.001) {
+    c.font = `800 ${S * 0.4}px "Bricolage Grotesque"`;
+    const ww = c.measureText('VINCULO').width;
+    const ox = W / 2, oy = H / 2, rx = ww * 0.6, ry = S * 0.3;
+    const a0 = Math.PI, turns = 1.15;
+    for (let k = 0; k <= N; k++) {
+      const u = k / N;
+      let tx, ty;
+      if (u < 0.12) {                                     // de la mano izquierda al lazo
+        const q = u / 0.12, ex = ox + Math.cos(a0) * rx, ey = oy + Math.sin(a0) * ry;
+        tx = A[0] + (ex - A[0]) * q; ty = A[1] + (ey - A[1]) * q + Math.sin(q * Math.PI) * S * 0.05;
+      } else if (u > 0.88) {                              // del lazo a la mano derecha
+        const q = (u - 0.88) / 0.12, ae = a0 + turns * TAU, ex = ox + Math.cos(ae) * rx, ey = oy + Math.sin(ae) * ry;
+        tx = ex + (B[0] - ex) * q; ty = ey + (B[1] - ey) * q - Math.sin(q * Math.PI) * S * 0.05;
+      } else {                                            // la vuelta alrededor de la palabra
+        const q = (u - 0.12) / 0.76, a = a0 + q * turns * TAU;
+        const wob = 1 + 0.06 * Math.sin(a * 3 + ph * 2) + q * 0.08;
+        tx = ox + Math.cos(a) * rx * wob; ty = oy + Math.sin(a) * ry * wob;
+      }
+      loopPath.push([tx, ty]);
+    }
+  }
+  c.filter = `blur(${S * 0.004}px)`;
+  c.lineWidth = S * 0.01;
+  if (around < 0.999) { c.strokeStyle = heatRGB(0.13 * (1 - Math.min(1, around * 1.5))); polyline(c, cord); c.stroke(); }
+  if (loopPath.length) {
+    c.strokeStyle = heatRGB(0.13 * fade);
+    polyline(c, loopPath.slice(0, Math.max(2, Math.round(draw * (N + 1))))); c.stroke();
+  }
+
+  // cuentas que viajan por el cordón (la señal, como un sifonóforo)
+  c.filter = `blur(${S * 0.008}px)`;
+  for (let i = 0; i < 14; i++) {
+    const u = mod(i / 14 + t / 6, 1), k = Math.min(N - 1, Math.floor(u * N));
+    const [x, y] = cord[k], [x2, y2] = cord[k + 1];
+    const ang = Math.atan2(y2 - y, x2 - x), pul = Math.sin(Math.PI * u);
+    oval(c, x, y, S * 0.022 * pul, S * 0.012 * pul, ang, 0.09 * pul);
+  }
+
+  // lo que queda: la palabra, escrita por el cordón mientras las manos se retiran
+  const wenv = sm(0.36, 0.42, p) * (1 - sm(0.86, 0.95, p));
+  if (wenv > 0.01) {
+    const reveal = sm(0.36, 0.45, p);
+    const fs = S * 0.4;
+    c.font = `800 ${fs}px "Bricolage Grotesque"`;
+    c.textAlign = 'left'; c.textBaseline = 'middle';
+    const w = c.measureText('VINCULO').width, x0 = W / 2 - w / 2;
+    c.save();
+    c.beginPath(); c.rect(x0 - S * 0.1, 0, (w + S * 0.2) * reveal, H); c.clip();
+    c.filter = `blur(${S * 0.007}px)`;
+    for (let e = 3; e >= 0; e--) {
+      c.fillStyle = heatRGB(e === 0 ? 0.13 * wenv : 0.025 * wenv);
+      c.fillText('VINCULO', x0 - e * S * 0.03, H * 0.5);
+    }
+    c.restore();
+  }
+  c.filter = 'none';
+}
+
+/* ---------- dibujo ---------- */
+function render(t) {
+  const p = t / LOOP;
+  const gl = gauss(p, 0.3, 0.012) + 0.6 * gauss(p, 0.37, 0.01);   // glitch: el toque y la palabra
+  shader(sh);
+  sh.setUniform('uHeat', heat);
+  sh.setUniform('uRamp', rampG);
+  sh.setUniform('uRes', [CW, CH]);
+  sh.setUniform('uTime', t);
+  sh.setUniform('uCell', CH / 95);
+  sh.setUniform('uGlitch', Math.min(1, gl));
+  noStroke();
+  rect(-width / 2, -height / 2, width, height);
+}
+
+function draw() {
+  const t = mod(window.T != null ? window.T : millis() / 1000, LOOP);
+  if (window.T != null && lastT !== window.T) { for (let i = 45; i >= 1; i--) heatFrame(mod(t - i / 30, LOOP)); }
+  heatFrame(t);
+  lastT = window.T;
+  render(t);
+}
+
+/* ---------- exportar MP4 (requiere node server.js) ---------- */
+async function exportMP4(name = 'vinculo-1920x1080.mp4', fps = 30) {
+  const { Muxer, ArrayBufferTarget } = await import('https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/+esm');
+  const muxer = new Muxer({ target: new ArrayBufferTarget(), video: { codec: 'avc', width: CW, height: CH }, fastStart: 'in-memory' });
+  const enc = new VideoEncoder({ output: (c, m) => muxer.addVideoChunk(c, m), error: (e) => console.error(e) });
+  enc.configure({ codec: 'avc1.640028', width: CW, height: CH, bitrate: 24e6, framerate: fps });
+  const copy = document.createElement('canvas'); copy.width = CW; copy.height = CH;
+  const cc = copy.getContext('2d'), gl = drawingContext.canvas, total = LOOP * fps;
+  noLoop();
+  for (let f = -fps * 2; f < 0; f++) heatFrame(mod(f / fps, LOOP));     // pre-roll: la estela entra en régimen → loop sin salto
+  for (let f = 0; f < total; f++) {
+    const t = f / fps; heatFrame(t); render(t); cc.drawImage(gl, 0, 0);
+    const vf = new VideoFrame(copy, { timestamp: Math.round((f * 1e6) / fps), duration: Math.round(1e6 / fps) });
+    enc.encode(vf, { keyFrame: f % fps === 0 }); vf.close();
+    if (enc.encodeQueueSize > 6) await new Promise((r) => setTimeout(r, 0));
+  }
+  await enc.flush(); muxer.finalize();
+  await fetch('/export?name=' + encodeURIComponent(name), { method: 'POST', body: new Blob([muxer.target.buffer], { type: 'video/mp4' }) });
+  loop();
+  return name;
+}
+</script>
+</body>
+</html>

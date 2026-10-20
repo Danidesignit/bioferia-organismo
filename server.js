@@ -19,6 +19,19 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
     return res.end(JSON.stringify({ pulsoUrl: ip ? `http://${ip}:${PORT}/pulso/` : null }));
   }
+  // /export?name=archivo.png: la página /exportar guarda imágenes y videos en la carpeta exports/
+  if (p === '/export' && req.method === 'POST') {
+    const name = new URL(req.url, 'http://x').searchParams.get('name') || '';
+    const local = /^(127\.0\.0\.1|::1|::ffff:127\.0\.0\.1)$/.test(req.socket.remoteAddress);
+    if (!local || !/^[\w.-]+\.(png|mp4|webm)$/.test(name)) { res.writeHead(400); return res.end('nombre no válido'); }
+    const dir = path.join(ROOT, 'exports');
+    fs.mkdirSync(dir, { recursive: true });
+    const out = fs.createWriteStream(path.join(dir, name));
+    req.pipe(out);
+    out.on('finish', () => { res.writeHead(200); res.end('ok'); });
+    out.on('error', () => { res.writeHead(500); res.end('error'); });
+    return;
+  }
   if (p === '/pulso' || p === '/colectivo') { res.writeHead(301, { Location: p + '/' }); return res.end(); }
   if (p.endsWith('/')) p += 'index.html';
   const file = path.normalize(path.join(ROOT, p));

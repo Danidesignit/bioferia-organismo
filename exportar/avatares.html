@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bioferia · Avatares</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #2b2b2b; overflow: hidden; }
+    main { height: 100%; display: grid; place-items: center; }
+    main canvas { max-width: 100vw; max-height: 100vh; width: auto !important; height: auto !important; }
+  </style>
+</head>
+<body>
+<main id="stage"></main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+<script>
+/* =========================================================================
+   AVATARES · personajes térmicos con la identidad de Bioferia
+   Cada avatar es un busto (cabeza y hombros) dibujado como calor y convertido
+   con un mapa de color de la marca, con trama de puntos, isolíneas y grano.
+   exportAll() guarda los 6 PNG cuadrados en exports/ (con server.js).
+   ========================================================================= */
+const N = 1024;                    // tamaño final (cuadrado)
+const Q = 0.5;
+
+// mapas de color (calor 0 → 1)
+const RAMPS = {
+  pulso:    [[0, '#ffffff'], [0.07, '#fbe8fb'], [0.18, '#f6bdf1'], [0.32, '#ef86e8'], [0.46, '#d955d8'], [0.58, '#9a2ce0'], [0.66, '#3a2fe0'], [0.73, '#1b2fb0'], [0.79, '#1fa35a'], [0.88, '#5fd13a'], [1, '#c8f53a']],
+  vinculo:  [[0, '#ffffff'], [0.07, '#e9efff'], [0.18, '#b7c8ff'], [0.32, '#6f8cff'], [0.46, '#3b5bf2'], [0.58, '#2a3fd6'], [0.66, '#1d2ba8'], [0.72, '#e874d8'], [0.79, '#22c8f0'], [0.88, '#3ff3ff'], [1, '#d6ffff']],
+  impacto:  [[0, '#ffffff'], [0.07, '#f3eefc'], [0.18, '#d7c2f5'], [0.3, '#9d86f0'], [0.42, '#3f43e6'], [0.54, '#2228b8'], [0.63, '#7a3fe0'], [0.7, '#22a85a'], [0.76, '#e6ff00'], [0.88, '#f2ff3a'], [1, '#fbffc4']],
+  concepto: [[0, '#ffffff'], [0.08, '#d9f1e0'], [0.17, '#22a45f'], [0.27, '#0f3f86'], [0.4, '#2a2db8'], [0.55, '#7650d8'], [0.7, '#e49be4'], [0.85, '#f6d6f4'], [1, '#e2f7ff']],
+  lima:     [[0, '#ffffff'], [0.08, '#eefbd8'], [0.2, '#b8f03a'], [0.34, '#22a85a'], [0.48, '#1b6fd0'], [0.6, '#2a2db8'], [0.72, '#7650d8'], [0.84, '#ef86e8'], [1, '#fff0fb']],
+  magenta:  [[0, '#ffffff'], [0.08, '#ffe6f4'], [0.2, '#ff8fd0'], [0.34, '#e0198a'], [0.48, '#7a2ce0'], [0.6, '#2a2db8'], [0.72, '#22c8f0'], [0.84, '#e6ff00'], [1, '#fbffc4']],
+};
+
+// los 6 personajes: mapa, peinado, detalle, rasgos
+const AVATARS = [
+  { name: 'avatar-01-rulos-pulso',       ramp: 'pulso',    hair: 'curly', extra: 'ecg',     beard: false, glasses: false, tilt: -0.06 },
+  { name: 'avatar-02-pelo-largo-vinculo', ramp: 'vinculo',  hair: 'long',  extra: 'cord',    beard: false, glasses: true,  tilt: 0.04 },
+  { name: 'avatar-03-gorro-impacto',     ramp: 'impacto',  hair: 'cap',   extra: 'circles', beard: true,  glasses: false, tilt: 0.0 },
+  { name: 'avatar-04-rodete-concepto',   ramp: 'concepto', hair: 'bun',   extra: 'rings',   beard: false, glasses: false, tilt: 0.07 },
+  { name: 'avatar-05-pelo-corto-lima',   ramp: 'lima',     hair: 'short', extra: 'none',    beard: true,  glasses: true,  tilt: -0.03 },
+  { name: 'avatar-06-flequillo-magenta', ramp: 'magenta',  hair: 'bangs', extra: 'ecg',     beard: false, glasses: false, tilt: 0.05 },
+];
+
+const VERT = `
+precision highp float;
+attribute vec3 aPosition; attribute vec2 aTexCoord;
+uniform mat4 uModelViewMatrix, uProjectionMatrix;
+varying vec2 vUv;
+void main(){ vUv = aTexCoord; gl_Position = uProjectionMatrix * uModelViewMatrix * vec4(aPosition, 1.0); }`;
+
+const FRAG = `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D uHeat, uRamp;
+uniform vec2 uRes;
+uniform float uCell, uSeed;
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y); }
+vec3 ramp(float h){ return texture2D(uRamp, vec2(clamp(h, 0.0, 1.0), 0.5)).rgb; }
+float heatAt(vec2 uv){ return 1.0 - exp(-texture2D(uHeat, uv).r * 1.7); }
+void main(){
+  vec2 uv = vUv;
+  vec2 wp = uv * 5.0 + uSeed;
+  uv += (vec2(vnoise(wp), vnoise(wp + 7.3)) - 0.5) * 0.016;      // nunca formas perfectas
+  float h = heatAt(uv);
+  float g = hash(gl_FragCoord.xy + uSeed) - 0.5;
+  // trama de puntos donde el calor se apaga
+  float a = 0.4, ca = cos(a), sa = sin(a);
+  vec2 px = uv * uRes;
+  vec2 r = vec2(ca * px.x - sa * px.y, sa * px.x + ca * px.y);
+  vec2 cell = (floor(r / uCell) + 0.5) * uCell, f = fract(r / uCell) - 0.5;
+  vec2 cp = vec2(ca * cell.x + sa * cell.y, -sa * cell.x + ca * cell.y);
+  float hc = heatAt(cp / uRes);
+  float rad = sqrt(hc) * 0.7;
+  float dotM = smoothstep(rad, rad - 0.12, length(f));
+  float dots = smoothstep(0.34, 0.1, h) * step(0.015, hc);
+  vec3 col = mix(ramp(h + g * 0.05), mix(ramp(0.0), ramp(clamp(0.22 + hc * 1.4, 0.0, 1.0)), dotM), dots);
+  // isolíneas
+  float b = h * 7.0, fb = fract(b), d = min(fb, 1.0 - fb);
+  float line = (1.0 - smoothstep(0.01, 0.045, d)) * smoothstep(0.3, 0.45, h);
+  col = mix(col, ramp(min(1.0, h + 0.3)), line * 0.55);
+  col += g * 0.045 * smoothstep(0.0, 0.05, h + dots * hc);
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+let sh, heat, hctx, rampG;
+function setup() {
+  pixelDensity(1);
+  createCanvas(N, N, WEBGL).parent('stage');
+  sh = createShader(VERT, FRAG);
+  heat = createGraphics(N * Q, N * Q); heat.pixelDensity(1); hctx = heat.drawingContext;
+  rampG = createGraphics(256, 1); rampG.pixelDensity(1);
+  noLoop();
+  renderAvatar(AVATARS[0], 1);
+}
+function draw() {}
+
+const TAU = Math.PI * 2;
+const heatRGB = (v) => `rgb(${Math.round(255 * Math.min(1, Math.max(0, v)))},0,0)`;
+function oval(c, x, y, rx, ry, rot, v) { c.fillStyle = heatRGB(v); c.beginPath(); c.ellipse(x, y, rx, ry, rot, 0, TAU); c.fill(); }
+function glow(c, x, y, r, v) {
+  const g = c.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, heatRGB(v)); g.addColorStop(1, 'rgb(0,0,0)');
+  c.fillStyle = g; c.beginPath(); c.arc(x, y, r, 0, TAU); c.fill();
+}
+function cool(c, x, y, rx, ry, a) {        // zonas frías (ojos, anteojos): restan calor
+  c.save(); c.globalCompositeOperation = 'source-over'; c.fillStyle = `rgba(0,0,0,${a})`;
+  c.beginPath(); c.ellipse(x, y, rx, ry, 0, 0, TAU); c.fill(); c.restore();
+}
+
+/* ---------- el personaje en calor ---------- */
+function drawCharacter(A, seed) {
+  const c = hctx, S = heat.width, rnd = (k) => { const v = Math.sin((seed + k) * 12.9898) * 43758.5453; return v - Math.floor(v); };
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.globalCompositeOperation = 'source-over'; c.filter = 'none';
+  c.fillStyle = '#000'; c.fillRect(0, 0, S, S);
+  c.globalCompositeOperation = 'lighter';
+  c.lineCap = 'round'; c.lineJoin = 'round';
+  c.translate(S / 2, S / 2); c.rotate(A.tilt); c.translate(-S / 2, -S / 2);
+  const hx = S * 0.5, hy = S * 0.46;                 // centro de la cabeza
+
+  // halo del fondo (calor ambiente)
+  c.filter = `blur(${S * 0.06}px)`;
+  glow(c, hx, hy + S * 0.1, S * 0.48, 0.12);
+
+  // hombros y cuello
+  c.filter = `blur(${S * 0.02}px)`;
+  oval(c, hx, S * 0.99, S * 0.42, S * 0.28, 0, 0.35);
+  oval(c, hx, hy + S * 0.2, S * 0.075, S * 0.08, 0, 0.42);
+
+  // pelo detrás (largo / rodete / rulos)
+  if (A.hair === 'long') { oval(c, hx, hy + S * 0.12, S * 0.22, S * 0.3, 0, 0.28); }
+  if (A.hair === 'bun') { oval(c, hx + S * 0.02, hy - S * 0.25, S * 0.09, S * 0.08, 0, 0.5); }
+  if (A.hair === 'curly') {
+    for (let i = 0; i < 18; i++) {
+      const a = Math.PI * (1.05 + 0.9 * (i / 17)) + (rnd(i) - 0.5) * 0.2;
+      oval(c, hx + Math.cos(a) * S * 0.2, hy - S * 0.02 + Math.sin(a) * S * 0.23, S * 0.055, S * 0.055, 0, 0.3 + rnd(i + 30) * 0.15);
+    }
+  }
+
+  // cabeza: cara caliente al centro, bordes más fríos
+  c.filter = `blur(${S * 0.016}px)`;
+  oval(c, hx, hy, S * 0.175, S * 0.188, 0, 0.42);
+  c.filter = `blur(${S * 0.035}px)`;
+  glow(c, hx, hy + S * 0.02, S * 0.15, 0.55);
+
+  // pelo encima (gorro / corto / flequillo)
+  c.filter = `blur(${S * 0.014}px)`;
+  if (A.hair === 'cap') {
+    c.fillStyle = heatRGB(0.3);
+    c.beginPath(); c.ellipse(hx, hy - S * 0.07, S * 0.19, S * 0.19, 0, Math.PI, TAU); c.fill();   // gorro de lana
+    oval(c, hx, hy - S * 0.075, S * 0.2, S * 0.04, 0, 0.36);                                      // borde doblado
+    oval(c, hx, hy - S * 0.27, S * 0.05, S * 0.05, 0, 0.45);                                      // pompón
+  }
+  if (A.hair === 'short') {
+    c.fillStyle = heatRGB(0.3);
+    c.beginPath(); c.ellipse(hx, hy - S * 0.06, S * 0.17, S * 0.16, 0, Math.PI * 1.02, TAU * 0.99); c.fill();
+  }
+  if (A.hair === 'bangs') {
+    c.fillStyle = heatRGB(0.3);
+    c.beginPath(); c.ellipse(hx, hy - S * 0.04, S * 0.18, S * 0.17, 0, Math.PI * 0.95, TAU * 1.02); c.fill();
+    for (let i = 0; i < 5; i++) oval(c, hx - S * 0.1 + i * S * 0.05, hy - S * 0.08, S * 0.03, S * 0.06, 0.2, 0.2);
+  }
+  if (A.hair === 'long') {
+    c.fillStyle = heatRGB(0.28);
+    c.beginPath(); c.ellipse(hx, hy - S * 0.05, S * 0.18, S * 0.17, 0, Math.PI * 1.0, TAU); c.fill();
+  }
+  if (A.beard) {
+    c.filter = `blur(${S * 0.02}px)`;
+    c.fillStyle = heatRGB(0.22);
+    c.beginPath(); c.ellipse(hx, hy + S * 0.1, S * 0.14, S * 0.12, 0, 0, Math.PI); c.fill();
+  }
+
+  // rasgos: ojos y boca más fríos (se leen como huecos térmicos)
+  c.filter = `blur(${S * 0.008}px)`;
+  cool(c, hx - S * 0.06, hy - S * 0.005, S * 0.026, S * 0.016, 0.45);
+  cool(c, hx + S * 0.06, hy - S * 0.005, S * 0.026, S * 0.016, 0.45);
+  cool(c, hx, hy + S * 0.11, S * 0.04, S * 0.013, 0.35);
+  if (A.glasses) {
+    c.save(); c.globalCompositeOperation = 'source-over'; c.strokeStyle = 'rgba(0,0,0,0.55)'; c.lineWidth = S * 0.011;
+    [-1, 1].forEach((k) => { c.beginPath(); c.ellipse(hx + k * S * 0.065, hy - S * 0.005, S * 0.05, S * 0.038, 0, 0, TAU); c.stroke(); });
+    c.beginPath(); c.moveTo(hx - S * 0.015, hy - S * 0.01); c.lineTo(hx + S * 0.015, hy - S * 0.01); c.stroke();
+    c.restore();
+  }
+
+  // detalle de subsistema
+  c.filter = `blur(${S * 0.004}px)`;
+  if (A.extra === 'ecg') {                           // pulso: línea de electrocardiograma en el pecho
+    c.strokeStyle = heatRGB(0.55); c.lineWidth = S * 0.01;
+    c.beginPath();
+    for (let k = -50; k <= 50; k++) {
+      const u = k / 50, x = hx + u * S * 0.3, g = (q, w) => { const z = (u - q) / w; return Math.exp(-z * z); };
+      const y = S * 0.86 - S * (0.12 * g(0, 0.04) - 0.04 * g(0.08, 0.03) + 0.025 * g(-0.4, 0.1));
+      k === -50 ? c.moveTo(x, y) : c.lineTo(x, y);
+    }
+    c.stroke();
+  }
+  if (A.extra === 'cord') {                          // vínculo: cordón alrededor del cuello con cuentas
+    c.strokeStyle = heatRGB(0.5); c.lineWidth = S * 0.009;
+    c.beginPath(); c.ellipse(hx, hy + S * 0.3, S * 0.13, S * 0.06, 0, 0.1, Math.PI - 0.1); c.stroke();
+    c.beginPath(); c.moveTo(hx, hy + S * 0.36); c.quadraticCurveTo(hx + S * 0.02, hy + S * 0.45, hx - S * 0.01, hy + S * 0.52); c.stroke();
+    for (let i = 0; i < 5; i++) { const a = 0.4 + i * 0.55; glow(c, hx + Math.cos(a) * S * 0.13, hy + S * 0.3 + Math.sin(a) * S * 0.06, S * 0.018, 0.6); }
+  }
+  if (A.extra === 'circles' || A.extra === 'rings') {  // impacto: círculos finos / concepto: ondas
+    c.lineWidth = S * (A.extra === 'circles' ? 0.004 : 0.008);
+    const n = A.extra === 'circles' ? 7 : 3;
+    for (let i = 0; i < n; i++) {
+      c.strokeStyle = heatRGB(A.extra === 'circles' ? 0.4 : 0.22);
+      c.beginPath();
+      if (A.extra === 'circles') c.arc(S * (0.15 + rnd(i + 50) * 0.7), S * (0.12 + rnd(i + 60) * 0.5), S * (0.04 + rnd(i + 70) * 0.09), 0, TAU);
+      else c.ellipse(hx, hy, S * (0.26 + i * 0.07), S * (0.3 + i * 0.07), 0, 0, TAU);
+      c.stroke();
+    }
+  }
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.filter = 'none';
+}
+
+function renderAvatar(A, seed) {
+  const rc = rampG.drawingContext, gr = rc.createLinearGradient(0, 0, 256, 0);
+  RAMPS[A.ramp].forEach(([p, col]) => gr.addColorStop(p, col));
+  rc.clearRect(0, 0, 256, 1); rc.fillStyle = gr; rc.fillRect(0, 0, 256, 1);
+  drawCharacter(A, seed);
+  shader(sh);
+  sh.setUniform('uHeat', heat);
+  sh.setUniform('uRamp', rampG);
+  sh.setUniform('uRes', [N, N]);
+  sh.setUniform('uCell', N / 90);
+  sh.setUniform('uSeed', seed * 3.7);
+  noStroke();
+  rect(-width / 2, -height / 2, width, height);
+}
+
+async function exportAll() {
+  for (let i = 0; i < AVATARS.length; i++) {
+    renderAvatar(AVATARS[i], i + 1);
+    const blob = await new Promise((r) => drawingContext.canvas.toBlob(r, 'image/png'));
+    await fetch('/export?name=' + AVATARS[i].name + '.png', { method: 'POST', body: blob });
+  }
+  return AVATARS.length;
+}
+</script>
+</body>
+</html>

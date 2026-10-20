@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bioferia · Sumar para conectar</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&display=swap">
+  <style>
+    html, body { margin: 0; height: 100%; background: #2b2b2b; overflow: hidden; }
+    main { height: 100%; display: grid; place-items: center; }
+    main canvas { max-width: 100vw; max-height: 100vh; width: auto !important; height: auto !important; }
+  </style>
+</head>
+<body>
+<main id="stage"></main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+<script>
+/* =========================================================================
+   TAGLINE 3D · "Sumar para conectar"  (16:9)
+   Historia del loop (14 s):
+     1. Tres pulsos: volúmenes térmicos abstractos, separados, cada uno con su ritmo.
+     2. Se suman: se funden en una sola masa que se calienta.
+     3. Conectan: la masa se derrite en la frase "sumar para conectar" en 3D.
+     4. Colectivo: la frase se funde en el logo Bioferia.
+     5. El logo se separa otra vez en tres pulsos → el loop cierra sin corte.
+   Técnica: raymarching de campos de distancia (SDF). La frase y el logo se
+   rasterizan, se convierten en campos de distancia 2D y se extruyen en 3D;
+   el morphing es la mezcla de esos campos.
+   window.T = segundos fija un instante · exportMP4() guarda el video (con server.js).
+   ========================================================================= */
+const LOOP = 14;
+const CW = 1920, CH = 1080, ASPECT = CW / CH;
+const RANGE = 0.1;                 // alcance del campo de distancia (unidades: alto del cuadro = 1)
+const TEX_H = 640;                 // resolución de los campos de distancia
+
+// paleta de los afiches (calor 0 → 1)
+const RAMP = [
+  [0.00, '#ffffff'], [0.08, '#d9f1e0'], [0.17, '#22a45f'], [0.27, '#0f3f86'],
+  [0.4, '#2a2db8'], [0.55, '#7650d8'], [0.7, '#e49be4'], [0.85, '#f6d6f4'], [1.00, '#e2f7ff'],
+];
+
+const VERT = `
+precision highp float;
+attribute vec3 aPosition; attribute vec2 aTexCoord;
+uniform mat4 uModelViewMatrix, uProjectionMatrix;
+varying vec2 vUv;
+void main(){ vUv = aTexCoord; gl_Position = uProjectionMatrix * uModelViewMatrix * vec4(aPosition, 1.0); }`;
+
+const FRAG = `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D uText, uLogo, uRamp;
+uniform float uAspect, uRange, uTime, uWB, uWT, uWL, uMelt, uMerge, uRotY, uRotX, uWave;
+uniform vec4 uB0, uB1, uB2;
+uniform float uPart;
+uniform vec2 uTexSize;
+uniform float uPh;   // fase del loop (0 → 2π)
+
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float smin(float a, float b, float k){ float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
+float sdf2(sampler2D tex, vec2 xy){
+  vec2 uv = vec2(xy.x / uAspect + 0.5, 0.5 - xy.y);
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return uRange;
+  // 16 bits (R alto + G bajo) con interpolación bilineal manual: superficies lisas
+  vec2 px = uv * uTexSize - 0.5, f = fract(px), b = (floor(px) + 0.5) / uTexSize, o = 1.0 / uTexSize;
+  vec4 a = texture2D(tex, b), c = texture2D(tex, b + vec2(o.x, 0.0)), e = texture2D(tex, b + vec2(0.0, o.y)), g = texture2D(tex, b + o);
+  float va = (a.r * 255.0 * 256.0 + a.g * 255.0) / 65535.0, vc = (c.r * 255.0 * 256.0 + c.g * 255.0) / 65535.0;
+  float ve = (e.r * 255.0 * 256.0 + e.g * 255.0) / 65535.0, vg = (g.r * 255.0 * 256.0 + g.g * 255.0) / 65535.0;
+  float v = mix(mix(va, vc, f.x), mix(ve, vg, f.x), f.y);
+  return (v - 0.5) * 2.0 * uRange;
+}
+// globo inflado: el espesor crece hacia el centro de cada trazo (perfil redondo)
+float inflate(float d2, float z, float breath){
+  float di = d2 - 0.009;                                   // más gordas: las letras se conectan
+  float h = 0.1 * breath * sqrt(clamp(-di / 0.05, 0.0, 1.0));      // perfil redondo en todo el ancho: globo
+  vec2 w = vec2(di, abs(z) - h);
+  return (min(max(w.x, w.y), 0.0) + length(max(w, 0.0))) * 0.55;
+}
+float blobs(vec3 p){
+  float d = length(p - uB0.xyz) - uB0.w;
+  d = smin(d, length(p - uB1.xyz) - uB1.w, 0.09);
+  return smin(d, length(p - uB2.xyz) - uB2.w, 0.09);
+}
+float base(vec3 p){
+  float d = 0.0;
+  if (uWB > 0.001) d += uWB * blobs(p);
+  if (uWT > 0.001 || uWL > 0.001) {
+    // ola suave que recorre la forma (frecuencias enteras de uPh = loop exacto)
+    vec2 q = p.xy + vec2(0.0, 0.012 * sin(p.x * 5.0 - uPh * 2.0) + 0.006 * sin(p.x * 11.0 + uPh * 3.0));
+    float breath = 1.0 + 0.18 * sin(p.x * 4.0 - uPh * 3.0) + 0.08 * sin(uPh * 2.0);
+    if (uWT > 0.001) d += uWT * inflate(sdf2(uText, q), p.z, breath);
+    if (uWL > 0.001) d += uWL * inflate(sdf2(uLogo, q), p.z, breath);
+  }
+  return d;
+}
+// partículas: pequeños globos que salen del logo al armarse y se alejan achicándose
+float parts(vec3 p){
+  float d = 1.0;
+  for (int i = 0; i < 14; i++) {
+    float fi = float(i);
+    float h1 = fract(sin(fi * 12.9898) * 43758.5453), h2 = fract(sin(fi * 78.233) * 12345.678), h3 = fract(sin(fi * 37.719) * 9876.54);
+    float k = clamp(uPart * (1.1 + h3 * 0.6) - h3 * 0.35, 0.0, 1.0);
+    vec3 s = vec3((h1 - 0.5) * 0.85, (h2 - 0.5) * 0.12, 0.0);
+    vec3 dir = normalize(vec3(s.x * 0.6 + (h2 - 0.5) * 0.4, (h2 - 0.5) * 1.2 + (h1 - 0.5) * 0.5, (h3 - 0.5) * 0.8));
+    vec3 c = s + dir * k * (0.22 + h1 * 0.18);
+    float r = (0.012 + h3 * 0.016) * sin(3.14159 * k);
+    d = min(d, length(p - c) - r);
+  }
+  return d;
+}
+float map(vec3 p){
+  float d = base(p);
+  if (uPart > 0.001) d = smin(d, parts(p), 0.025);
+  // al transformarse, la materia se derrite (solo cerca de la superficie)
+  return d + uMelt * 0.02 * smoothstep(0.07, 0.0, d) * sin(p.x * 31.0 + uTime * 2.0) * sin(p.y * 27.0 - uTime * 1.6) * sin(p.z * 23.0 + 1.3);
+}
+vec3 calcN(vec3 p){
+  const vec2 e = vec2(1.0, -1.0) * 0.0025;
+  return normalize(e.xyy * map(p + e.xyy) + e.yyx * map(p + e.yyx) + e.yxy * map(p + e.yxy) + e.xxx * map(p + e.xxx));
+}
+mat3 rotY(float a){ float c = cos(a), s = sin(a); return mat3(c, 0.0, -s, 0.0, 1.0, 0.0, s, 0.0, c); }
+mat3 rotX(float a){ float c = cos(a), s = sin(a); return mat3(1.0, 0.0, 0.0, 0.0, c, s, 0.0, -s, c); }
+vec3 ramp(float h){ return texture2D(uRamp, vec2(clamp(h, 0.0, 1.0), 0.5)).rgb; }
+
+void main(){
+  vec2 sp = vec2((vUv.x - 0.5) * uAspect, 0.5 - vUv.y);
+  mat3 R = rotY(uRotY) * rotX(uRotX);
+  vec3 ro = R * vec3(0.0, 0.0, 2.6);
+  vec3 rd = R * normalize(vec3(sp, -2.6));
+  float t = 1.9, minD = 10.0, d = 1.0;
+  bool hit = false;
+  for (int i = 0; i < 110; i++) {
+    vec3 p = ro + rd * t;
+    d = map(p);
+    minD = min(minD, d);
+    if (d < 0.0008) { hit = true; break; }
+    t += max(d * 0.8, 0.0015);
+    if (t > 3.4) break;
+  }
+  float g = hash(gl_FragCoord.xy + fract(uTime) * 91.0) - 0.5;
+  vec3 col;
+  if (hit) {
+    vec3 p = ro + rd * t;
+    vec3 n = calcN(p);
+    float facing = clamp(dot(n, -rd), 0.0, 1.0);
+    // calor: núcleo caliente al frente, bordes fríos; la suma y la onda lo suben
+    float h = 0.27 + 0.42 * pow(facing, 2.0) + uMerge * 0.14
+            + 0.1 * sin(p.x * 11.0 + uTime * 0.9) * sin(p.y * 9.0 - uTime * 0.7);   // vetas térmicas
+    h += uWave * exp(-pow((p.x - mix(-0.8, 0.8, fract(uTime / 3.0))) / 0.12, 2.0)) * 0.25;
+    col = ramp(h + g * 0.04);
+    vec3 L = normalize(vec3(-0.5, 0.6, 0.8));
+    float diff = clamp(dot(n, L), 0.0, 1.0);
+    float spec = pow(clamp(dot(reflect(-L, n), -rd), 0.0, 1.0), 28.0);
+    col *= 0.8 + 0.3 * diff;
+    col += spec * 0.35;
+  } else {
+    // halo térmico alrededor de las formas (como el borde verde de los afiches)
+    // halo: distancia a las formas sobre el plano medio (suave, sin bandas)
+    vec3 p0 = ro + rd * (-ro.z / rd.z);
+    float dz = max(base(p0), 0.0);
+    float cut = 0.055;
+    float halo = clamp((exp(-dz * 16.0) - exp(-cut * 16.0)) / (1.0 - exp(-cut * 16.0)), 0.0, 1.0);
+    col = mix(ramp(0.0), ramp(0.05 + 0.11 * pow(halo, 1.4)), smoothstep(0.0, 0.9, halo) * 0.55);
+  }
+  col += g * 0.035 * (hit ? 1.0 : smoothstep(0.995, 0.9, col.g));
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+let sh, texText, texLogo, rampG, ready = false;
+
+function setup() {
+  pixelDensity(1);
+  createCanvas(CW, CH, WEBGL).parent('stage');
+  sh = createShader(VERT, FRAG);
+  rampG = createGraphics(256, 1); rampG.pixelDensity(1);
+  const rc = rampG.drawingContext, gr = rc.createLinearGradient(0, 0, 256, 0);
+  RAMP.forEach(([p, c]) => gr.addColorStop(p, c));
+  rc.fillStyle = gr; rc.fillRect(0, 0, 256, 1);
+  build();
+}
+
+/* ---------- campos de distancia de la frase y el logo ---------- */
+async function build() {
+  await document.fonts.load('800 100px "Bricolage Grotesque"');
+  const tw = Math.round(TEX_H * ASPECT), th = TEX_H;
+
+  // frase en dos líneas centradas (letras con cuerpo para inflarse), con margen de seguridad
+  texText = sdfTexture(tw, th, (c) => {
+    const lines = ['sumar para', 'conectar'];
+    let fs = th * 0.26;
+    c.font = `800 ${fs}px "Bricolage Grotesque"`;
+    const wMax = tw * 0.7, w = Math.max(...lines.map((l) => c.measureText(l).width));
+    if (w > wMax) { fs *= wMax / w; c.font = `800 ${fs}px "Bricolage Grotesque"`; }
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    const lh = fs * 0.98;
+    lines.forEach((l, i) => c.fillText(l, tw / 2, th / 2 + (i - 0.5) * lh + fs * 0.04));
+  });
+
+  // logo: los paths del SVG de marca
+  const svg = await (await fetch('../assets/bioferia-logo.svg')).text();
+  const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+  const vb = doc.documentElement.getAttribute('viewBox').split(/\s+/).map(Number);
+  const paths = [...doc.querySelectorAll('path')].map((p) => new Path2D(p.getAttribute('d')));
+  texLogo = sdfTexture(tw, th, (c) => {
+    const s = Math.min((tw * 0.62) / vb[2], (th * 0.5) / vb[3]);
+    c.translate(tw / 2 - (vb[2] * s) / 2, th / 2 - (vb[3] * s) / 2);
+    c.scale(s, s);
+    paths.forEach((p) => c.fill(p));
+  });
+  ready = true;
+}
+
+function sdfTexture(w, h, drawFn) {
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const c = cv.getContext('2d', { willReadFrequently: true });
+  c.fillStyle = '#000'; c.fillRect(0, 0, w, h);
+  c.fillStyle = '#fff';
+  drawFn(c);
+  const a = c.getImageData(0, 0, w, h).data, N = w * h, INF = 1e20;
+  const inside = new Float64Array(N), outside = new Float64Array(N);
+  for (let i = 0; i < N; i++) { const on = a[i * 4] > 127; outside[i] = on ? 0 : INF; inside[i] = on ? INF : 0; }
+  edt(outside, w, h); edt(inside, w, h);
+  // distancia firmada (+ afuera / − adentro), suavizada: redondea la arista central → globo
+  const sd = new Float32Array(N);
+  for (let i = 0; i < N; i++) sd[i] = Math.sqrt(outside[i]) - Math.sqrt(inside[i]);
+  boxBlur(sd, w, h, Math.round(h * 0.008)); boxBlur(sd, w, h, Math.round(h * 0.008)); boxBlur(sd, w, h, Math.round(h * 0.008));
+  const g = createGraphics(w, h); g.pixelDensity(1);
+  const img = g.drawingContext.createImageData(w, h);
+  for (let i = 0; i < N; i++) {
+    const dpx = sd[i];
+    const v = Math.max(0, Math.min(65535, Math.round(((dpx / h) / RANGE * 0.5 + 0.5) * 65535)));
+    img.data[i * 4] = v >> 8; img.data[i * 4 + 1] = v & 255; img.data[i * 4 + 2] = 0; img.data[i * 4 + 3] = 255;
+  }
+  g.drawingContext.putImageData(img, 0, 0);
+  _renderer.getTexture(g).setInterpolation(NEAREST, NEAREST);   // los bytes se interpolan en el shader
+  return g;
+}
+
+function boxBlur(a, w, h, r) {
+  const tmp = new Float32Array(a.length), k = 1 / (2 * r + 1);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let s = 0; for (let j = -r; j <= r; j++) s += a[y * w + Math.min(w - 1, Math.max(0, x + j))]; tmp[y * w + x] = s * k;
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let s = 0; for (let j = -r; j <= r; j++) s += tmp[Math.min(h - 1, Math.max(0, y + j)) * w + x]; a[y * w + x] = s * k;
+  }
+}
+// transformada de distancia euclídea exacta (Felzenszwalb & Huttenlocher)
+function edt(grid, w, h) {
+  const n = Math.max(w, h), f = new Float64Array(n), d = new Float64Array(n), v = new Int32Array(n), z = new Float64Array(n + 1);
+  for (let x = 0; x < w; x++) { for (let y = 0; y < h; y++) f[y] = grid[y * w + x]; dt1(f, h, d, v, z); for (let y = 0; y < h; y++) grid[y * w + x] = d[y]; }
+  for (let y = 0; y < h; y++) { for (let x = 0; x < w; x++) f[x] = grid[y * w + x]; dt1(f, w, d, v, z); for (let x = 0; x < w; x++) grid[y * w + x] = d[x]; }
+}
+function dt1(f, n, d, v, z) {
+  let k = 0; v[0] = 0; z[0] = -1e20; z[1] = 1e20;
+  for (let q = 1; q < n; q++) {
+    let s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+    while (s <= z[k]) { k--; s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]); }
+    k++; v[k] = q; z[k] = s; z[k + 1] = 1e20;
+  }
+  k = 0;
+  for (let q = 0; q < n; q++) { while (z[k + 1] < q) k++; d[q] = (q - v[k]) * (q - v[k]) + f[v[k]]; }
+}
+
+/* ---------- línea de tiempo ---------- */
+const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const bump = (a, b, x) => (x <= a || x >= b ? 0 : Math.sin(Math.PI * (x - a) / (b - a)));
+
+function draw() {
+  if (!ready) { background(255); return; }
+  const t = ((window.T != null ? window.T : millis() / 1000) % LOOP + LOOP) % LOOP, p = t / LOOP, ph = p * Math.PI * 2;
+
+  // pesos: pulsos → frase → logo → pulsos
+  const wT = sm(0.2, 0.32, p) * (1 - sm(0.55, 0.66, p));
+  const wL = sm(0.55, 0.66, p) * (1 - sm(0.86, 0.98, p));
+  const wB = Math.max(0, 1 - wT - wL);
+  const melt = bump(0.2, 0.32, p) + bump(0.55, 0.66, p) + bump(0.86, 1.0, p);
+  // separación de los pulsos: 1 = separados (inicio y final del loop), 0 = fundidos
+  const sep = p < 0.5 ? 1 - sm(0, 0.2, p) : sm(0.86, 1.0, p);
+
+  // tres pulsos alrededor del centro, cada uno con su ritmo (frecuencias enteras = loop exacto)
+  const rads = [0.13, 0.11, 0.12], beats = [3, 4, 5];
+  const B = rads.map((r, i) => {
+    const a = ph + (i * Math.PI * 2) / 3 + 0.4;
+    const rr = sep * 0.27;
+    return [Math.cos(a) * rr * 1.25, Math.sin(a) * rr * 0.8, Math.sin(ph * 2 + i) * 0.04 * sep,
+            r * (1 + 0.12 * Math.sin(ph * beats[i] + i)) * (0.75 + 0.25 * sep + 0.35 * (1 - sep))];
+  });
+
+  shader(sh);
+  sh.setUniform('uText', texText);
+  sh.setUniform('uLogo', texLogo);
+  sh.setUniform('uRamp', rampG);
+  sh.setUniform('uAspect', ASPECT);
+  sh.setUniform('uRange', RANGE);
+  sh.setUniform('uTexSize', [texText.width, texText.height]);
+  sh.setUniform('uTime', t);
+  sh.setUniform('uPh', ph);
+  sh.setUniform('uWB', wB); sh.setUniform('uWT', wT); sh.setUniform('uWL', wL);
+  sh.setUniform('uMelt', melt);
+  sh.setUniform('uMerge', (1 - sep) * wB + 0.5 * (wT + wL));
+  sh.setUniform('uWave', wT + wL * 0.6);
+  sh.setUniform('uRotY', 0.0);
+  sh.setUniform('uRotX', 0.0);
+  sh.setUniform('uPart', sm(0.58, 0.84, p) * (1 - sm(0.84, 0.86, p)));
+  sh.setUniform('uB0', B[0]); sh.setUniform('uB1', B[1]); sh.setUniform('uB2', B[2]);
+  noStroke();
+  rect(-width / 2, -height / 2, width, height);
+}
+
+/* ---------- exportar MP4 (requiere node server.js) ---------- */
+async function exportMP4(name = 'tagline-sumar-para-conectar-1920x1080.mp4', fps = 30) {
+  const { Muxer, ArrayBufferTarget } = await import('https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/+esm');
+  const muxer = new Muxer({ target: new ArrayBufferTarget(), video: { codec: 'avc', width: CW, height: CH }, fastStart: 'in-memory' });
+  const enc = new VideoEncoder({ output: (c, m) => muxer.addVideoChunk(c, m), error: (e) => console.error(e) });
+  enc.configure({ codec: 'avc1.640028', width: CW, height: CH, bitrate: 20e6, framerate: fps });
+  const copy = document.createElement('canvas'); copy.width = CW; copy.height = CH;
+  const c = copy.getContext('2d'), gl = drawingContext.canvas, total = LOOP * fps;
+  noLoop();
+  for (let f = 0; f < total; f++) {
+    window.T = f / fps; redraw(); c.drawImage(gl, 0, 0);
+    const vf = new VideoFrame(copy, { timestamp: Math.round((f * 1e6) / fps), duration: Math.round(1e6 / fps) });
+    enc.encode(vf, { keyFrame: f % fps === 0 }); vf.close();
+    if (enc.encodeQueueSize > 6) await new Promise((r) => setTimeout(r, 0));
+  }
+  await enc.flush(); muxer.finalize();
+  await fetch('/export?name=' + encodeURIComponent(name), { method: 'POST', body: new Blob([muxer.target.buffer], { type: 'video/mp4' }) });
+  window.T = null; loop();
+  return name;
+}
+</script>
+</body>
+</html>

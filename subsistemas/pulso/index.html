@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bioferia · Pulso</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&display=swap">
+  <style>
+    html, body { margin: 0; height: 100%; background: #2b2b2b; overflow: hidden; }
+    main { height: 100%; display: grid; place-items: center; }
+    main canvas { max-width: 100vw; max-height: 100vh; width: auto !important; height: auto !important; }
+  </style>
+</head>
+<body>
+<main id="stage"></main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+<script>
+/* =========================================================================
+   PULSO · "un movimiento que genera otro"   (16:9 · loop de 12 s)
+   Cuatro latidos de 3 s. Cada uno:
+     1. un punto rosa late (lub-dub),
+     2. emite ondas que recorren todo el cuadro,
+     3. despierta una silueta térmica fugaz (mano · persona caminando · cabeza · brazo que se alza),
+     4. la silueta se disuelve en trama de puntos y su onda enciende el siguiente pulso.
+   El cuarto vuelve a encender el primero → loop.
+   Render: calor en un buffer 2D (con estela) → shader con mapa térmico rosa,
+   trama de semitono donde el calor se apaga, isolíneas, glitch y grano.
+   window.T = segundos fija un instante · exportMP4() guarda el video (con server.js).
+   ========================================================================= */
+const LOOP = 12, BEAT = 3;
+const CW = 1920, CH = 1080;
+const Q = 0.5;                                    // resolución del buffer de calor
+
+// mapa térmico de Pulso: blanco → rosa → magenta → violeta → azul (verde solo en lo más caliente)
+const RAMP = [
+  [0.00, '#ffffff'], [0.07, '#fbe8fb'], [0.18, '#f6bdf1'], [0.32, '#ef86e8'], [0.46, '#d955d8'],
+  [0.58, '#9a2ce0'], [0.66, '#3a2fe0'], [0.73, '#1b2fb0'], [0.79, '#1fa35a'], [0.88, '#5fd13a'], [1.0, '#c8f53a'],
+];
+
+// dónde late cada pulso (fracción del cuadro) y qué silueta despierta
+const BEATS = [
+  { p: [0.3, 0.6], fig: 'walkBack' },     // otra persona, caminando en sentido contrario
+  { p: [0.7, 0.3], fig: 'walk' },
+  { p: [0.8, 0.72], fig: 'head' },
+  { p: [0.42, 0.5], fig: 'word' },        // el cuarto latido escribe la palabra
+];
+
+const VERT = `
+precision highp float;
+attribute vec3 aPosition; attribute vec2 aTexCoord;
+uniform mat4 uModelViewMatrix, uProjectionMatrix;
+varying vec2 vUv;
+void main(){ vUv = aTexCoord; gl_Position = uProjectionMatrix * uModelViewMatrix * vec4(aPosition, 1.0); }`;
+
+const FRAG = `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D uHeat, uRamp;
+uniform vec2 uRes;
+uniform float uTime, uCell, uGlitch;
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+vec3 ramp(float h){ return texture2D(uRamp, vec2(clamp(h, 0.0, 1.0), 0.5)).rgb; }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y); }
+float heatAt(vec2 uv){ return 1.0 - exp(-texture2D(uHeat, uv).r * 1.7); }
+void main(){
+  vec2 uv = vUv;
+  // glitch: algunas filas se corren en cada golpe
+  float fr = floor(uTime * 24.0), row = floor(uv.y * 70.0);
+  uv.x += uGlitch * (hash(vec2(row, fr)) - 0.5) * 0.05 * step(0.82, hash(vec2(row * 1.7, fr + 3.0)));
+  // deformación orgánica: las formas respiran y nunca quedan perfectas
+  vec2 wp = uv * vec2(6.0, 3.4);
+  uv += (vec2(vnoise(wp + uTime * 0.35), vnoise(wp + 7.3 - uTime * 0.3)) - 0.5) * 0.022;
+  float h = heatAt(uv);
+  float g = hash(gl_FragCoord.xy + fract(uTime) * 91.0) - 0.5;
+
+  // trama de puntos (semitono) para el calor que se apaga
+  float a = 0.4, ca = cos(a), sa = sin(a);
+  vec2 px = vec2(uv.x * uRes.x, uv.y * uRes.y);
+  vec2 r = vec2(ca * px.x - sa * px.y, sa * px.x + ca * px.y);
+  vec2 cell = (floor(r / uCell) + 0.5) * uCell, f = fract(r / uCell) - 0.5;
+  vec2 cp = vec2(ca * cell.x + sa * cell.y, -sa * cell.x + ca * cell.y);
+  float hc = heatAt(cp / uRes);
+  float rad = sqrt(hc) * 0.7;
+  float dotM = smoothstep(rad, rad - 0.12, length(f));
+  float dots = smoothstep(0.34, 0.1, h) * step(0.015, hc);
+
+  vec3 solid = ramp(h + g * 0.05);
+  vec3 dotCol = mix(ramp(0.0), ramp(clamp(0.22 + hc * 1.4, 0.0, 1.0)), dotM);
+  vec3 col = mix(solid, dotCol, dots);
+
+  // isolíneas sutiles (rosa / lima) como en los afiches
+  float b = h * 7.0, fb = fract(b), d = min(fb, 1.0 - fb);
+  float line = (1.0 - smoothstep(0.01, 0.045, d)) * smoothstep(0.3, 0.45, h);
+  col = mix(col, mod(floor(b + 0.5), 2.0) < 1.0 ? vec3(0.85, 1.0, 0.25) : vec3(1.0, 0.35, 0.8), line * 0.55);
+
+  col += g * 0.04 * smoothstep(0.0, 0.05, h + dots * hc);
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+let sh, heat, hctx, rampG, lastT = null;
+
+function setup() {
+  pixelDensity(1);
+  createCanvas(CW, CH, WEBGL).parent('stage');
+  document.fonts.load('800 100px "Bricolage Grotesque"');
+  sh = createShader(VERT, FRAG);
+  heat = createGraphics(Math.round(CW * Q), Math.round(CH * Q)); heat.pixelDensity(1);
+  hctx = heat.drawingContext;
+  hctx.fillStyle = '#000'; hctx.fillRect(0, 0, heat.width, heat.height);
+  rampG = createGraphics(256, 1); rampG.pixelDensity(1);
+  const rc = rampG.drawingContext, gr = rc.createLinearGradient(0, 0, 256, 0);
+  RAMP.forEach(([p, c]) => gr.addColorStop(p, c));
+  rc.fillStyle = gr; rc.fillRect(0, 0, 256, 1);
+}
+
+const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const mod = (a, n) => ((a % n) + n) % n;
+const gauss = (x, c, w) => { const q = (x - c) / w; return Math.exp(-q * q); };
+
+/* ---------- un cuadro de calor (con estela del cuadro anterior) ---------- */
+function heatFrame(t) {
+  const W = heat.width, H = heat.height, S = H;
+  const c = hctx;
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.globalCompositeOperation = 'source-over'; c.filter = 'none';
+  c.fillStyle = 'rgba(0,0,0,0.13)';                   // estela: lo anterior se apaga de a poco
+  c.fillRect(0, 0, W, H);
+  c.globalCompositeOperation = 'lighter';
+  c.lineCap = 'round'; c.lineJoin = 'round';
+
+  BEATS.forEach((B, k) => {
+    // tiempo local de este latido, en el rango [-0.6, 11.4)
+    const lt = mod(t - k * BEAT + 0.6, LOOP) - 0.6;
+    const x = B.p[0] * W, y = B.p[1] * H;
+
+    // ondas: tres anillos concéntricos que recorren el cuadro
+    if (lt > 0 && lt < 5) {
+      for (let j = 0; j < 3; j++) {
+        const lj = lt - j * 0.22;
+        if (lj <= 0) continue;
+        const rr = lj * W * 0.32, k2 = Math.exp(-lj * 0.75) * (1 - j * 0.28);
+        c.filter = `blur(${S * 0.018}px)`;
+        c.strokeStyle = heatRGB(0.22 * k2);
+        c.lineWidth = S * 0.035 * (1 + lj * 0.25);
+        wobblyRing(c, x, y, rr, k * 3 + j, lj);
+        c.stroke();
+      }
+      // líneas finas concéntricas (huella) que acompañan a la onda
+      c.filter = `blur(${S * 0.004}px)`;
+      c.lineWidth = S * 0.006;
+      for (let j = 0; j < 6; j++) {
+        const lj = lt - 0.1 - j * 0.07;
+        if (lj <= 0) continue;
+        c.strokeStyle = heatRGB(0.16 * Math.exp(-lj * 0.9));
+        wobblyRing(c, x, y, lj * W * 0.3 + j * S * 0.012, k * 7 + j, lj);
+        c.stroke();
+      }
+    }
+
+    // electrocardiograma: una línea que recorre el cuadro como en un monitor;
+    // el pico del latido cae justo sobre el punto. Se dibuja solo el tramo nuevo:
+    // la estela del buffer hace el resto (se apaga detrás del trazo).
+    if (lt > -1.1 && lt < 1.9) {
+      const speed = W * 0.42, head = x + lt * speed, prev = head - speed / 30 * 1.6;
+      c.filter = `blur(${S * 0.004}px)`;
+      c.strokeStyle = heatRGB(0.32);
+      c.lineWidth = S * 0.014;
+      c.beginPath();
+      for (let px = Math.max(0, prev); px <= Math.min(W, head); px += 2) {
+        const py = y - ecg((px - x) / S) * S;
+        px === Math.max(0, prev) ? c.moveTo(px, py) : c.lineTo(px, py);
+      }
+      c.stroke();
+    }
+
+    // el punto: se enciende en el pico y late lub-dub
+    if (lt > -0.05 && lt < 2.2) {
+      const hb = gauss(lt, 0, 0.07) + 0.75 * gauss(lt, 0.3, 0.07);
+      const glow = Math.exp(-lt * 1.6);
+      c.filter = `blur(${S * 0.02}px)`;
+      blob(c, x, y - ecg(0) * S * 0.2, S * (0.035 + 0.045 * hb + 0.02 * glow), 0.05 * glow + 0.12 * hb);
+    }
+
+    // la silueta que despierta el pulso, con ecos
+    if (lt > 0.1 && lt < 3.2) {
+      const env = sm(0.1, 0.55, lt) * (1 - sm(2.1, 3.1, lt));
+      c.filter = `blur(${S * 0.032}px)`;
+      for (let e = 3; e >= 0; e--) {
+        const tt = lt - e * 0.13;
+        if (tt < 0) continue;
+        FIG[B.fig](c, x, y, S, tt, 0.07 * env * (1 - e * 0.2), e);
+      }
+    }
+  });
+  c.filter = 'none';
+}
+
+// anillo que ondula (no es un círculo perfecto)
+function wobblyRing(c, x, y, r, seed, t) {
+  c.beginPath();
+  for (let i = 0; i <= 90; i++) {
+    const a = (i / 90) * Math.PI * 2;
+    const w = 1 + 0.05 * Math.sin(a * 3 + seed + t * 1.5) + 0.03 * Math.sin(a * 7 - seed * 2 + t * 2.2);
+    const px = x + Math.cos(a) * r * w, py = y + Math.sin(a) * r * w * 0.92;
+    i ? c.lineTo(px, py) : c.moveTo(px, py);
+  }
+}
+// forma del electrocardiograma (u en unidades del alto): onda P, complejo QRS y onda T
+function ecg(u) {
+  return 0.035 * gauss(u, -0.17, 0.03) - 0.03 * gauss(u, -0.03, 0.01) + 0.3 * gauss(u, 0, 0.012)
+       - 0.09 * gauss(u, 0.03, 0.012) + 0.06 * gauss(u, 0.2, 0.045);
+}
+function heatRGB(v) { return `rgb(${Math.round(255 * Math.min(1, Math.max(0, v)))},0,0)`; }
+function blob(c, x, y, r, v) {
+  const g = c.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, heatRGB(v)); g.addColorStop(1, 'rgb(0,0,0)');
+  c.fillStyle = g; c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill();
+}
+function limb(c, x1, y1, x2, y2, w, v) {
+  c.strokeStyle = heatRGB(v); c.lineWidth = w;
+  c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.stroke();
+}
+function oval(c, x, y, rx, ry, rot, v) {
+  c.fillStyle = heatRGB(v); c.beginPath(); c.ellipse(x, y, rx, ry, rot, 0, Math.PI * 2); c.fill();
+}
+
+/* ---------- siluetas (formas difusas, no figurativas en detalle) ---------- */
+const FIG = {
+  // una mano que se abre
+  hand(c, x, y, S, tt, v) {
+    // mano abierta y grande: dedos separados, con menos desenfoque para que se lean
+    c.filter = `blur(${S * 0.012}px)`;
+    const open = sm(0.15, 1.0, tt), lift = sm(0, 2.5, tt) * S * 0.06;
+    const k = 1.45;                                       // escala de la mano
+    const cx = x - S * 0.05, cy = y + S * 0.06 - lift;
+    oval(c, cx, cy, S * 0.1 * k, S * 0.11 * k, -0.1, v);                              // palma
+    limb(c, cx + S * 0.01, cy + S * 0.1 * k, cx + S * 0.04, cy + S * 0.42, S * 0.13, v * 0.85);   // muñeca/antebrazo
+    // [ángulo cerrado, ángulo abierto, largo, ancho, punto de salida en la palma]
+    const F = [
+      [-2.1, -2.6, 0.12, 0.05, [-0.085, 0.01]],          // pulgar, sale del costado
+      [-1.75, -1.98, 0.17, 0.042, [-0.06, -0.085]],      // índice
+      [-1.57, -1.6, 0.19, 0.042, [-0.015, -0.1]],        // medio
+      [-1.4, -1.22, 0.175, 0.04, [0.03, -0.095]],        // anular
+      [-1.25, -0.85, 0.14, 0.036, [0.07, -0.07]],        // meñique
+    ];
+    F.forEach(([a0, a1, L, w, [ox, oy]]) => {
+      const a = a0 + (a1 - a0) * open;
+      const sx = cx + ox * S * k, sy = cy + oy * S * k;
+      const len = L * S * k * (0.7 + 0.3 * open);
+      const mx = sx + Math.cos(a) * len * 0.55, my = sy + Math.sin(a) * len * 0.55;   // nudillo
+      const b = a + 0.12 * (1 - open);                                                  // leve flexión
+      limb(c, sx, sy, mx, my, w * S * k, v);
+      limb(c, mx, my, mx + Math.cos(b) * len * 0.45, my + Math.sin(b) * len * 0.45, w * S * k * 0.9, v);
+    });
+  },
+  // una persona caminando que deja ecos
+  walkBack(c, x, y, S, tt, v) { FIG.walk(c, x, y, S, tt, v, 0, -1); },
+  walk(c, x, y, S, tt, v, e = 0, dir = 1) {
+    const px = x + dir * (tt - 1.4) * S * 0.22, ph = tt * 5.5, h = S * 0.5;
+    const hip = [px, y + h * 0.1], sh = [px + dir * h * 0.03, y - h * 0.32];      // se inclina hacia donde camina
+    oval(c, sh[0] + dir * h * 0.02, sh[1] - h * 0.17, h * 0.075, h * 0.09, 0, v); // cabeza
+    limb(c, hip[0], hip[1], sh[0], sh[1], h * 0.13, v);                              // torso
+    [1, -1].forEach((s) => {
+      const lg = Math.sin(ph) * 0.5 * s, ar = -Math.sin(ph) * 0.45 * s;
+      const kx = hip[0] + Math.sin(lg) * h * 0.25, ky = hip[1] + Math.cos(lg) * h * 0.25;
+      limb(c, hip[0], hip[1], kx, ky, h * 0.085, v);
+      limb(c, kx, ky, kx + Math.sin(lg - 0.3 * Math.abs(s)) * h * 0.25, ky + h * 0.24, h * 0.07, v);
+      const ex = sh[0] + Math.sin(ar) * h * 0.2, ey = sh[1] + Math.cos(ar) * h * 0.2;
+      limb(c, sh[0], sh[1], ex, ey, h * 0.065, v * 0.9);
+      limb(c, ex, ey, ex + Math.sin(ar + 0.4) * h * 0.18, ey + Math.cos(ar + 0.4) * h * 0.18, h * 0.055, v * 0.9);
+    });
+  },
+  // una cabeza que gira
+  head(c, x, y, S, tt, v) {
+    const turn = Math.sin(tt * 1.2) * 0.5;
+    const hx = x + turn * S * 0.04, hy = y - S * 0.06;
+    oval(c, hx, hy, S * 0.11 * (0.85 + 0.15 * Math.cos(turn)), S * 0.14, turn * 0.2, v);
+    oval(c, hx + turn * S * 0.07 + S * 0.03, hy + S * 0.02, S * 0.03, S * 0.05, 0, v * 0.6);  // nariz/perfil
+    limb(c, x, hy + S * 0.12, x, hy + S * 0.22, S * 0.08, v);                        // cuello
+    c.strokeStyle = heatRGB(v); c.lineWidth = S * 0.11;
+    c.beginPath(); c.moveTo(x - S * 0.3, y + S * 0.34); c.quadraticCurveTo(x, y + S * 0.1, x + S * 0.3, y + S * 0.34); c.stroke();
+  },
+  // la palabra: el último latido la escribe de izquierda a derecha, con ecos que se corren
+  word(c, x, y, S, tt, v, e = 0) {
+    const fs = S * 0.4;
+    c.save();
+    c.font = `800 ${fs}px "Bricolage Grotesque"`;
+    c.textAlign = 'left'; c.textBaseline = 'middle';
+    const w = c.measureText('PULSO').width, x0 = x - w / 2 + S * 0.25 - e * S * 0.035;
+    const reveal = sm(0.0, 0.8, tt);
+    c.beginPath(); c.rect(x0 - S * 0.1, 0, (w + S * 0.2) * reveal, heat.height); c.clip();
+    c.filter = `blur(${S * 0.007}px)`;
+    c.fillStyle = heatRGB(e === 0 ? v * 1.4 : v * 0.35);
+    c.fillText('PULSO', x0 - e * S * 0.03, y);
+    c.restore();
+  },
+};
+
+/* ---------- dibujo ---------- */
+function render(t) {
+  // glitch en cada golpe
+  let gl = 0;
+  BEATS.forEach((B, k) => { const lt = mod(t - k * BEAT + 0.6, LOOP) - 0.6; gl += gauss(lt, 0.05, 0.1) + 0.6 * gauss(lt, 0.35, 0.08); });
+  shader(sh);
+  sh.setUniform('uHeat', heat);
+  sh.setUniform('uRamp', rampG);
+  sh.setUniform('uRes', [CW, CH]);
+  sh.setUniform('uTime', t);
+  sh.setUniform('uCell', CH / 95);
+  sh.setUniform('uGlitch', Math.min(1, gl));
+  noStroke();
+  rect(-width / 2, -height / 2, width, height);
+}
+
+function draw() {
+  const t = mod(window.T != null ? window.T : millis() / 1000, LOOP);
+  if (window.T != null) {
+    // instante fijo: precalcula la estela de los cuadros anteriores
+    if (lastT !== window.T) { for (let i = 45; i >= 1; i--) heatFrame(mod(t - i / 30, LOOP)); }
+  }
+  heatFrame(t);
+  lastT = window.T;
+  render(t);
+}
+
+/* ---------- exportar MP4 (requiere node server.js) ---------- */
+async function exportMP4(name = 'pulso-1920x1080.mp4', fps = 30) {
+  const { Muxer, ArrayBufferTarget } = await import('https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/+esm');
+  const muxer = new Muxer({ target: new ArrayBufferTarget(), video: { codec: 'avc', width: CW, height: CH }, fastStart: 'in-memory' });
+  const enc = new VideoEncoder({ output: (c, m) => muxer.addVideoChunk(c, m), error: (e) => console.error(e) });
+  enc.configure({ codec: 'avc1.640028', width: CW, height: CH, bitrate: 24e6, framerate: fps });
+  const copy = document.createElement('canvas'); copy.width = CW; copy.height = CH;
+  const cc = copy.getContext('2d'), gl = drawingContext.canvas, total = LOOP * fps;
+  noLoop();
+  for (let f = -fps * 2; f < 0; f++) heatFrame(mod(f / fps, LOOP));     // pre-roll: la estela entra en régimen → loop sin salto
+  for (let f = 0; f < total; f++) {
+    const t = f / fps; heatFrame(t); render(t); cc.drawImage(gl, 0, 0);
+    const vf = new VideoFrame(copy, { timestamp: Math.round((f * 1e6) / fps), duration: Math.round(1e6 / fps) });
+    enc.encode(vf, { keyFrame: f % fps === 0 }); vf.close();
+    if (enc.encodeQueueSize > 6) await new Promise((r) => setTimeout(r, 0));
+  }
+  await enc.flush(); muxer.finalize();
+  await fetch('/export?name=' + encodeURIComponent(name), { method: 'POST', body: new Blob([muxer.target.buffer], { type: 'video/mp4' }) });
+  loop();
+  return name;
+}
+</script>
+</body>
+</html>

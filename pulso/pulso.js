@@ -293,7 +293,7 @@ function finishGesture() {
   view.t0 = millis() / 1000;
   document.querySelector('.traits').textContent = describePulse(pulse.f);
   const inp = document.getElementById('name');
-  inp.placeholder = `Un nombre o apodo (si no, #${pulse.code})`;
+  inp.placeholder = "Un nombre o apodo";
   document.querySelector('.sign-msg').textContent = '';
   go('preview');
 }

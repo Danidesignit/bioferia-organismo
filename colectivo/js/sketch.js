@@ -150,7 +150,7 @@ function updateTags() {
   for (let i = tags.length - 1; i >= 0; i--) {
     const g = tags[i], age = (now - g.t0) / 1000;
     if (age > 10 || g.z.dead) { g.el.remove(); tags.splice(i, 1); continue; }
-    const x = Math.min(W.w - 60, Math.max(60, g.z.x)), y = Math.min(W.h - 20, Math.max(50, g.z.y - 24 * W.S));
+    const x = Math.min(W.w * 0.86, Math.max(W.w * 0.14, g.z.x)), y = Math.min(W.h * 0.8, Math.max(60, g.z.y - 24 * W.S));   // no se pisa con los textos de abajo
     g.el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%)`;
     g.el.style.opacity = age > 8.5 ? 0 : 1;
   }

@@ -33,7 +33,7 @@ function setup() {
   org = new Organism();
 
   loadStore();
-  stored.forEach((p) => { known.add(p.id); if (p.code) realCount++; });
+  stored.forEach((p) => { known.add(p.id); if (p.code && !p.sim) realCount++; });
   if (stored.length) {
     for (const p of stored.slice(-CONFIG.maxZooids)) org.addPulse(p, { instant: true });
     org.warmup(3);
@@ -106,7 +106,7 @@ let realCount = 0;
 function receive(p, opts) {
   if (!p || !p.f || known.has(p.id)) return;
   known.add(p.id);
-  if (p.code) realCount++;
+  if (p.code && !p.sim) realCount++;
   const z = org.addPulse(p, opts);
   persist(p);
   hudCount = -1;
@@ -146,7 +146,19 @@ function receiveHistory(list) {
   const fresh = (list || []).filter((p) => p && p.f && !known.has(p.id));
   fresh.forEach((p) => receive(p, { instant: true }));
 }
-function addSimulated() { receive(Pulse.simulate()); }
+// los simulados también llevan su código, así todos los pulsos se ven iguales en pantalla
+function codeFor(seed) {
+  const A = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  let s = '', n = seed >>> 0;
+  for (let i = 0; i < 4; i++) { s += A[n % A.length]; n = Math.floor(n / A.length) + i * 7919; }
+  return s;
+}
+function addSimulated() {
+  const p = Pulse.simulate();
+  p.code = codeFor(p.seed);
+  p.sim = true;
+  receive(p);
+}
 function seedInitial() {
   for (let i = 0; i < CONFIG.initialPulses; i++) setTimeout(addSimulated, 400 + i * 900);
 }

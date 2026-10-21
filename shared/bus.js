@@ -6,6 +6,13 @@
    - Respaldo sin servidor (por ejemplo, sitio estático): BroadcastChannel entre
      pestañas del mismo navegador, como en el prototipo.
    ========================================================================= */
+// Dirección del servidor en vivo. Si la página se abre desde otra copia publicada en Render
+// (por ejemplo un sitio estático sin servidor), se redirige acá para que los pulsos lleguen.
+const LIVE_HOST = 'bioferia-organismo.onrender.com';
+if (/.onrender.com$/.test(location.hostname) && location.hostname !== LIVE_HOST) {
+  location.replace('https://' + LIVE_HOST + location.pathname + location.search + location.hash);
+}
+
 const PulseBus = (() => {
   const NAME = 'bioferia-2027';
   const listeners = [], initListeners = [];
@@ -61,8 +68,10 @@ const PulseBus = (() => {
             ch.postMessage({ type: 'pulse', pulse }); return { ok: true, local: true };
           }
           if (r.status >= 502 && r.status <= 504) { await new Promise((ok) => setTimeout(ok, 3000)); continue; }
-          const data = await r.json().catch(() => ({}));
-          if (!r.ok) return { ok: false, error: data.error || 'No se pudo enviar' };
+          const data = await r.json().catch(() => null);
+          if (!r.ok) return { ok: false, error: (data && data.error) || 'No se pudo enviar' };
+          // solo es un envío real si respondió server.js (un sitio estático devuelve HTML con 200)
+          if (!data || data.ok !== true) return { ok: false, error: 'Esta dirección no recibe pulsos' };
           return { ok: true, ...data };
         }
         return { ok: false, error: 'Sin conexión' };

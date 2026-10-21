@@ -131,11 +131,21 @@ const HI = (heat) => `rgb(${Math.round(255 * Math.min(1, Math.max(0, heat)))},0,
 const INK = (v) => `rgb(${Math.round(255 * Math.min(1, Math.max(0, v)))},0,0)`;
 
 /* ---------- la huella: suela simple ---------- */
+// una sola silueta continua de suela: puntera ancha, cintura angosta, talón redondeado
+const SOLE = [
+  [0.02, -0.56], [0.12, -0.53], [0.18, -0.44], [0.2, -0.3], [0.17, -0.16], [0.13, -0.04],
+  [0.12, 0.1], [0.14, 0.24], [0.14, 0.38], [0.09, 0.5], [0.0, 0.53], [-0.09, 0.5], [-0.13, 0.38],
+  [-0.12, 0.24], [-0.1, 0.1], [-0.11, -0.04], [-0.15, -0.18], [-0.17, -0.32], [-0.14, -0.46], [-0.07, -0.54],
+];
 function solePath(c, s) {
+  const P = SOLE.map(([x, y]) => [x * s, y * s]), n = P.length;
   c.beginPath();
-  c.ellipse(s * 0.02, -s * 0.28, s * 0.17, s * 0.28, -0.04, 0, TAU);
-  c.ellipse(s * 0.03, s * 0.08, s * 0.13, s * 0.22, 0.03, 0, TAU);
-  c.ellipse(s * 0.0, s * 0.34, s * 0.14, s * 0.18, 0, 0, TAU);
+  c.moveTo((P[n - 1][0] + P[0][0]) / 2, (P[n - 1][1] + P[0][1]) / 2);
+  for (let i = 0; i < n; i++) {
+    const a = P[i], b = P[(i + 1) % n];
+    c.quadraticCurveTo(a[0], a[1], (a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
+  }
+  c.closePath();
 }
 
 /* ---------- texto con halo térmico + relleno de tinta ---------- */
@@ -232,36 +242,41 @@ function heatFrame(t) {
       }
     }
 
-    // 4 · lo que cambió: IMPACTO, con el mismo tratamiento que VINCULO
+    // 4 · lo que cambió: IMPACTO negra con halo térmico y ecos de color desplazados (como "Cambia")
     const wenv = sm(2.6, 3.2, age) * (1 - sm(7.2, 8.4, age));
     if (wenv > 0.01) {
-      const fs = S * 0.34;
+      const fs = S * 0.34, X = W / 2, Y = H * 0.47;
       c.font = `800 ${fs}px "Bricolage Grotesque"`;
       c.textAlign = 'center'; c.textBaseline = 'middle';
-      c.filter = `blur(${S * 0.045}px)`;                        // borde quemado
-      c.fillStyle = HI(0.05 * wenv); c.fillText('IMPACTO', W / 2, H * 0.47);
-      c.filter = `blur(${S * 0.008}px)`;
-      for (let e = 2; e >= 0; e--) {
-        c.fillStyle = HI(e === 0 ? 0.12 * wenv : 0.025 * wenv);
-        c.fillText('IMPACTO', W / 2 - e * S * 0.025, H * 0.47);
+      c.filter = `blur(${S * 0.05}px)`;                              // halo amplio
+      c.fillStyle = HI(0.07 * wenv); c.fillText('IMPACTO', X, Y);
+      for (let e = 2; e >= 1; e--) {                                 // ecos de color, desplazados abajo y a la derecha
+        c.filter = `blur(${S * (0.012 + e * 0.004)}px)`;
+        c.fillStyle = HI((0.1 - e * 0.025) * wenv);
+        c.fillText('IMPACTO', X + e * S * 0.03, Y + e * S * 0.035);
       }
-      // sombra negra suave desplazada
-      inkShadow((k) => { k.font = c.font; k.textAlign = 'center'; k.textBaseline = 'middle'; k.fillText('IMPACTO', W / 2, H * 0.47); },
-        S * 0.018, S * 0.022, S * 0.006, 0.85 * wenv);
+      c.filter = `blur(${S * 0.012}px)`;                             // brillo pegado a la letra
+      c.fillStyle = HI(0.12 * wenv); c.fillText('IMPACTO', X, Y);
+      // letra negra, limpia
+      ictx.save(); ictx.font = c.font; ictx.textAlign = 'center'; ictx.textBaseline = 'middle'; ictx.filter = 'none';
+      ictx.fillStyle = INK(1.0 * wenv); ictx.fillText('IMPACTO', X, Y); ictx.restore();
     }
 
     // bajada y logo (como en Vínculo)
     const benv = sm(3.6, 4.3, age) * (1 - sm(7.0, 8.0, age));
     if (benv > 0.01) {
+      // negro con un halo térmico chico, como la palabra
       const font = `600 ${S * 0.065}px "Instrument Sans"`;
-      c.filter = `blur(${S * 0.004}px)`;
       c.font = font; c.textAlign = 'center'; c.textBaseline = 'middle';
-      c.fillStyle = HI(0.09 * benv);
-      c.fillText('El cambio', W / 2, H * 0.8);
+      c.filter = `blur(${S * 0.012}px)`;
+      c.fillStyle = HI(0.07 * benv); c.fillText('El cambio', W / 2, H * 0.8);
+      ictx.save(); ictx.font = font; ictx.textAlign = 'center'; ictx.textBaseline = 'middle'; ictx.filter = 'none';
+      ictx.fillStyle = INK(0.95 * benv); ictx.fillText('El cambio', W / 2, H * 0.8); ictx.restore();
       if (logoPaths) {
         const lw = S * 0.32, sc = lw / logoVB[2];
         const drawLogo = (k) => { k.save(); k.translate(W / 2 - lw / 2, H * 0.865); k.scale(sc, sc); logoPaths.forEach((p) => k.fill(p)); k.restore(); };
-        c.fillStyle = HI(0.08 * benv); drawLogo(c);
+        c.filter = `blur(${S * 0.012}px)`; c.fillStyle = HI(0.06 * benv); drawLogo(c);
+        ictx.save(); ictx.filter = 'none'; ictx.fillStyle = INK(0.95 * benv); drawLogo(ictx); ictx.restore();
       }
     }
   }

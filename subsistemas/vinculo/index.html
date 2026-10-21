@@ -16,7 +16,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
 <script>
 /* =========================================================================
-   VÍNCULO · "lo que nos une se construye de a partes"   (16:9 · loop de 18 s)
+   VÍNCULO · "lo que nos une se construye de a partes"   (16:9 · loop de 12 s; tiempos abajo en escala de 18)
    Misma familia que Pulso e Impacto (calor + estela + trama + isolíneas + grano).
      0–3 s     la viruta: una tira continua se desenrolla en espiral desde un borde.
      2–4.5 s   el encuentro: otra tira llega del otro lado, con otro ritmo.
@@ -29,7 +29,8 @@
      15.5–18 s todo se desarma y vuelve a empezar (loop exacto).
    window.T = segundos fija un instante · exportMP4() guarda el video (con server.js).
    ========================================================================= */
-const LOOP = 18;
+const LOOP = 12;
+const DUR = 18;                    // la línea de tiempo está escrita en 18 s y se reproduce comprimida en LOOP
 const CW = 1920, CH = 1080;
 const Q = 0.5;
 
@@ -168,6 +169,7 @@ function hand(c, x, y, dir, S, v, grip) {
 
 /* ---------- un cuadro de calor ---------- */
 function heatFrame(t) {
+  t = t * DUR / LOOP;
   const W = heat.width, H = heat.height, S = H, c = hctx;
   c.setTransform(1, 0, 0, 1, 0, 0);
   c.globalCompositeOperation = 'source-over'; c.filter = 'none';
@@ -182,7 +184,7 @@ function heatFrame(t) {
     c.beginPath();
     for (let k = 0; k <= 40; k++) {
       const x = (k / 40) * (W + S * 0.4) - S * 0.2;
-      const y = H * (0.22 + i * 0.3) + Math.sin((x / W) * TAU + (t / LOOP) * TAU + i * 2) * S * 0.12;
+      const y = H * (0.22 + i * 0.3) + Math.sin((x / W) * TAU + (t / DUR) * TAU + i * 2) * S * 0.12;
       k ? c.lineTo(x, y) : c.moveTo(x, y);
     }
     c.stroke();
@@ -298,6 +300,7 @@ function heatFrame(t) {
 
 /* ---------- dibujo ---------- */
 function render(t) {
+  t = t * DUR / LOOP;
   const gl = gauss(t, 6.1, 0.12) + 0.7 * gauss(t, 11.1, 0.1) + 0.5 * gauss(t, 4.4, 0.1);   // encuentro, cadena, palabra
   shader(sh);
   sh.setUniform('uHeat', heat);
@@ -319,7 +322,7 @@ function draw() {
 }
 
 /* ---------- exportar MP4 (requiere node server.js) ---------- */
-async function exportMP4(name = 'vinculo-1920x1080.mp4', fps = 30) {
+async function exportMP4(name = 'vinculo-v2-1920x1080.mp4', fps = 30) {
   const { Muxer, ArrayBufferTarget } = await import('https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/+esm');
   const muxer = new Muxer({ target: new ArrayBufferTarget(), video: { codec: 'avc', width: CW, height: CH }, fastStart: 'in-memory' });
   const enc = new VideoEncoder({ output: (c, m) => muxer.addVideoChunk(c, m), error: (e) => console.error(e) });

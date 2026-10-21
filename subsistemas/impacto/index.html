@@ -257,26 +257,27 @@ function heatFrame(t) {
       }
       c.filter = `blur(${S * 0.012}px)`;                             // brillo pegado a la letra
       c.fillStyle = HI(0.12 * wenv); c.fillText('IMPACTO', X, Y);
-      // letra negra, limpia
-      ictx.save(); ictx.font = c.font; ictx.textAlign = 'center'; ictx.textBaseline = 'middle'; ictx.filter = 'none';
-      ictx.fillStyle = INK(1.0 * wenv); ictx.fillText('IMPACTO', X, Y); ictx.restore();
+      // negro en degradado tipo glow: un núcleo difuso más una capa suave que se abre hacia afuera
+      ictx.save(); ictx.font = c.font; ictx.textAlign = 'center'; ictx.textBaseline = 'middle';
+      ictx.filter = `blur(${S * 0.045}px)`; ictx.fillStyle = INK(0.45 * wenv); ictx.fillText('IMPACTO', X, Y);
+      ictx.filter = `blur(${S * 0.018}px)`; ictx.fillStyle = INK(0.75 * wenv); ictx.fillText('IMPACTO', X, Y);
+      ictx.restore();
     }
 
     // bajada y logo (como en Vínculo)
     const benv = sm(3.6, 4.3, age) * (1 - sm(7.0, 8.0, age));
     if (benv > 0.01) {
-      // negro con un halo térmico chico, como la palabra
-      const font = `600 ${S * 0.065}px "Instrument Sans"`;
-      c.font = font; c.textAlign = 'center'; c.textBaseline = 'middle';
-      c.filter = `blur(${S * 0.012}px)`;
-      c.fillStyle = HI(0.07 * benv); c.fillText('El cambio', W / 2, H * 0.8);
-      ictx.save(); ictx.font = font; ictx.textAlign = 'center'; ictx.textBaseline = 'middle'; ictx.filter = 'none';
-      ictx.fillStyle = INK(0.95 * benv); ictx.fillText('El cambio', W / 2, H * 0.8); ictx.restore();
+      // exactamente como "La conexión" en Vínculo: solo térmico
+      c.filter = `blur(${S * 0.004}px)`;
+      c.font = `600 ${S * 0.065}px "Instrument Sans"`;
+      c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillStyle = HI(0.09 * benv);
+      c.fillText('El cambio', W / 2, H * 0.8);
       if (logoPaths) {
         const lw = S * 0.32, sc = lw / logoVB[2];
-        const drawLogo = (k) => { k.save(); k.translate(W / 2 - lw / 2, H * 0.865); k.scale(sc, sc); logoPaths.forEach((p) => k.fill(p)); k.restore(); };
-        c.filter = `blur(${S * 0.012}px)`; c.fillStyle = HI(0.06 * benv); drawLogo(c);
-        ictx.save(); ictx.filter = 'none'; ictx.fillStyle = INK(0.95 * benv); drawLogo(ictx); ictx.restore();
+        c.save(); c.translate(W / 2 - lw / 2, H * 0.865); c.scale(sc, sc);
+        c.fillStyle = HI(0.08 * benv); logoPaths.forEach((p) => c.fill(p));
+        c.restore();
       }
     }
   }

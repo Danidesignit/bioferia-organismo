@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Bioferia · Pulso</title>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&family=Instrument+Sans:wght@500..600&display=swap">
   <style>
     html, body { margin: 0; height: 100%; background: #2b2b2b; overflow: hidden; }
     main { height: 100%; display: grid; place-items: center; }
@@ -98,12 +98,18 @@ void main(){
   gl_FragColor = vec4(col, 1.0);
 }`;
 
-let sh, heat, hctx, rampG, lastT = null;
+let sh, heat, hctx, rampG, lastT = null, logoPaths = null, logoVB = null;
 
 function setup() {
   pixelDensity(1);
   createCanvas(CW, CH, WEBGL).parent('stage');
   document.fonts.load('800 100px "Bricolage Grotesque"');
+  document.fonts.load('600 40px "Instrument Sans"');
+  fetch('../../assets/bioferia-logo.svg').then((r) => r.text()).then((svg) => {
+    const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+    logoVB = doc.documentElement.getAttribute('viewBox').split(/\s+/).map(Number);
+    logoPaths = [...doc.querySelectorAll('path')].map((p) => new Path2D(p.getAttribute('d')));
+  }).catch(() => {});
   sh = createShader(VERT, FRAG);
   heat = createGraphics(Math.round(CW * Q), Math.round(CH * Q)); heat.pixelDensity(1);
   hctx = heat.drawingContext;
@@ -193,6 +199,25 @@ function heatFrame(t) {
       }
     }
   });
+
+  // bajada y logo debajo de la palabra (como en Vínculo e Impacto)
+  const lw4 = mod(t - 3 * BEAT + 0.6, LOOP) - 0.6;
+  const benv = sm(0.6, 1.1, lw4) * (1 - sm(2.1, 3.0, lw4));
+  if (benv > 0.01) {
+    c.font = '800 ' + (S * 0.4) + 'px "Bricolage Grotesque"';
+    const wcx = BEATS[3].p[0] * W + S * 0.25;                 // centro de la palabra PULSO
+    c.filter = `blur(${S * 0.004}px)`;
+    c.font = `600 ${S * 0.065}px "Instrument Sans"`;
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillStyle = heatRGB(0.09 * benv);
+    c.fillText('La intención', wcx, H * 0.8);
+    if (logoPaths) {
+      const lw = S * 0.32, sc = lw / logoVB[2];
+      c.save(); c.translate(wcx - lw / 2, H * 0.865); c.scale(sc, sc);
+      c.fillStyle = heatRGB(0.08 * benv); logoPaths.forEach((p) => c.fill(p));
+      c.restore();
+    }
+  }
   c.filter = 'none';
 }
 

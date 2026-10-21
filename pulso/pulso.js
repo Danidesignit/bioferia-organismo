@@ -348,7 +348,7 @@ function bindUI() {
       if (name) pulse.name = name; else delete pulse.name;
       inp.blur();
       b.disabled = true; b.textContent = 'Sumando…';
-      const r = await PulseBus.send(pulse);
+      const r = await PulseBus.send(pulse, (s) => { if (s >= 4) b.textContent = s < 15 ? 'Conectando…' : 'Despertando la pantalla… ' + s + ' s'; });
       b.disabled = false;
       if (r.ok) {
         const code = document.querySelector('.code');

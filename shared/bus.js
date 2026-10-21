@@ -13,6 +13,14 @@ const PulseBus = (() => {
   const emit = (p) => listeners.forEach((f) => f(p, { remote: true }));
   if (ch) ch.onmessage = (e) => { if (e.data && e.data.type === 'pulse') emit(e.data.pulse); };
 
+  // gestos muy largos: se mandan 400 puntos repartidos en todo el trazo (alcanza para dibujarlo igual)
+  function compact(p) {
+    const pts = (p.raw && p.raw.points) || [];
+    if (pts.length <= 400) return p;
+    const step = (pts.length - 1) / 399;
+    return { ...p, raw: { ...p.raw, points: Array.from({ length: 400 }, (_, i) => pts[Math.round(i * step)]) } };
+  }
+
   let es = null;
   const state = { connected: false };
 
@@ -29,19 +37,36 @@ const PulseBus = (() => {
 
   return {
     state,
-    // devuelve { ok, error } — ok:false si el servidor rechazó el pulso (ej.: demasiado seguido)
-    async send(pulse) {
+    // devuelve { ok, error }. Solo confirma cuando el servidor lo recibió de verdad.
+    // Reintenta solo ante cortes de red (celular con señal floja, servidor gratis despertándose).
+    // onWait(seg) avisa si tarda, para mostrarlo en pantalla.
+    async send(pulse, onWait) {
+      const body = JSON.stringify(compact(pulse));
+      const started = Date.now();
+      const tick = onWait ? setInterval(() => onWait(Math.round((Date.now() - started) / 1000)), 1000) : null;
       try {
-        const r = await fetch('/api/pulse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pulse) });
-        if (r.status === 404 || r.status === 405) throw new Error('sin servidor');
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok) return { ok: false, error: data.error || 'No se pudo enviar' };
-        return { ok: true, ...data };
-      } catch (_) {
-        // sin servidor: respaldo local entre pestañas
-        if (ch) { ch.postMessage({ type: 'pulse', pulse }); return { ok: true, local: true }; }
+        for (let attempt = 0; attempt < 4; attempt++) {
+          let r;
+          try {
+            const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            const to = ctl ? setTimeout(() => ctl.abort(), 60000) : null;
+            r = await fetch('/api/pulse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signal: ctl && ctl.signal });
+            clearTimeout(to);
+          } catch (_) {
+            await new Promise((ok) => setTimeout(ok, 1500 * (attempt + 1)));
+            continue;                                                   // corte de red: reintentar
+          }
+          if ((r.status === 404 || r.status === 405) && ch) {
+            // página estática sin server.js (prototipo): respaldo local entre pestañas
+            ch.postMessage({ type: 'pulse', pulse }); return { ok: true, local: true };
+          }
+          if (r.status >= 502 && r.status <= 504) { await new Promise((ok) => setTimeout(ok, 3000)); continue; }
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) return { ok: false, error: data.error || 'No se pudo enviar' };
+          return { ok: true, ...data };
+        }
         return { ok: false, error: 'Sin conexión' };
-      }
+      } finally { clearInterval(tick); }
     },
     onPulse(fn) { listeners.push(fn); listen(); },
     onInit(fn) { initListeners.push(fn); listen(); },

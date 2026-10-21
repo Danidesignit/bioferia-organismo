@@ -15,7 +15,9 @@ const ROOT = __dirname;
 const DATA = path.join(ROOT, 'data', 'pulses.json');
 const MAX_STORED = 600;        // pulsos que se conservan
 const INIT_SEND = 200;         // pulsos que recibe una pantalla al conectarse
-const MIN_GAP_MS = 2500;       // un pulso cada 2,5 s por dispositivo (evita spam)
+// anti-spam por IP: en la feria muchos celulares comparten la misma wifi (misma IP pública),
+// así que se permite una ráfaga razonable en lugar de "uno cada X segundos"
+const RATE_WINDOW_MS = 30000, RATE_MAX = 40;
 
 const lanIPs = () => Object.values(os.networkInterfaces()).flat().filter((i) => i && i.family === 'IPv4' && !i.internal).map((i) => i.address);
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -37,7 +39,9 @@ const clamp = (v, a, b) => (typeof v === 'number' && isFinite(v) ? Math.min(b, M
 // acepta solo los campos esperados, con números acotados (no se guarda ningún dato personal)
 function clean(p) {
   if (!p || typeof p !== 'object' || !p.raw || !p.f) return null;
-  const pts = Array.isArray(p.raw.points) ? p.raw.points.slice(0, 400) : [];
+  // gestos largos: se conservan 400 puntos repartidos a lo largo de todo el trazo (no solo el principio)
+  const all = Array.isArray(p.raw.points) ? p.raw.points.filter(Array.isArray) : [];
+  const pts = all.length <= 400 ? all : Array.from({ length: 400 }, (_, i) => all[Math.round((i * (all.length - 1)) / 399)]);
   const f = p.f;
   return {
     v: 1,
@@ -68,11 +72,12 @@ function broadcast(event, data) {
 }
 setInterval(() => { for (const res of screens) res.write(': latido\n\n'); }, 25000);   // mantiene viva la conexión
 
-const lastByIp = new Map();
+const hitsByIp = new Map();
 function readBody(req, limit, cb) {
   let size = 0, chunks = [];
-  req.on('data', (c) => { size += c.length; if (size > limit) { req.destroy(); return; } chunks.push(c); });
-  req.on('end', () => cb(Buffer.concat(chunks).toString('utf8')));
+  let over = false;
+  req.on('data', (c) => { size += c.length; if (size > limit) over = true; else chunks.push(c); });
+  req.on('end', () => cb(over ? null : Buffer.concat(chunks).toString('utf8')));
 }
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); };
 
@@ -83,12 +88,16 @@ http.createServer((req, res) => {
   if (p === '/api/pulse' && req.method === 'POST') {
     const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
     const now = Date.now();
-    if (now - (lastByIp.get(ip) || 0) < MIN_GAP_MS) return json(res, 429, { ok: false, error: 'Esperá unos segundos' });
-    return readBody(req, 64 * 1024, (body) => {
+    const hits = (hitsByIp.get(ip) || []).filter((t) => now - t < RATE_WINDOW_MS);
+    if (hits.length >= RATE_MAX) return json(res, 429, { ok: false, error: 'Esperá unos segundos' });
+    return readBody(req, 512 * 1024, (body) => {
+      if (body === null) return json(res, 413, { ok: false, error: 'El gesto es demasiado largo' });
       let pulse;
       try { pulse = clean(JSON.parse(body)); } catch (_) { pulse = null; }
       if (!pulse) return json(res, 400, { ok: false, error: 'Pulso no válido' });
-      lastByIp.set(ip, now);
+      // reintento del mismo pulso (por ejemplo, si se cortó la respuesta): no se duplica
+      if (pulses.some((q) => q.id === pulse.id)) return json(res, 200, { ok: true, count: pulses.length, screens: screens.size });
+      hits.push(now); hitsByIp.set(ip, hits);
       pulses.push(pulse);
       if (pulses.length > MAX_STORED) pulses = pulses.slice(-MAX_STORED);
       save();

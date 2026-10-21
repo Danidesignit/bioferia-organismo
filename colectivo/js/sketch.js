@@ -158,7 +158,9 @@ function updateTags() {
 // al conectarse, el servidor manda el historial: se suma lo que esta pantalla todavía no tiene
 function receiveHistory(list) {
   const fresh = (list || []).filter((p) => p && p.f && !known.has(p.id));
-  fresh.forEach((p) => receive(p, { instant: true }));
+  // si la conexión se cortó un momento, los pulsos de los últimos 2 minutos entran con su etiqueta
+  const now = Date.now();
+  fresh.forEach((p) => receive(p, now - (p.t || 0) < 120000 && known.size > 0 ? undefined : { instant: true }));
 }
 // los simulados también llevan su código, así todos los pulsos se ven iguales en pantalla
 function codeFor(seed) {

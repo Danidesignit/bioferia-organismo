@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bioferia · Sumar para conectar (3D acrílico)</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&display=swap">
+  <style>
+    html, body { margin: 0; height: 100%; background: #2b2b2b; overflow: hidden; }
+    main { height: 100%; display: grid; place-items: center; }
+    main canvas { max-width: 100vw; max-height: 100vh; width: auto !important; height: auto !important; }
+  </style>
+</head>
+<body>
+<main id="stage"></main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+<script>
+/* =========================================================================
+   TAGLINE 3D · "Sumar para conectar"   (16:9 · loop de 12 s · acrílico)
+   La misma historia que el 2D, en volumen:
+     0–4.2 s   cuentas de acrílico entran desde fuera del cuadro (y desde la profundidad),
+               dejando su estela térmica en el fondo
+     1.6–5.6 s se funden en un cuerpo de vidrio que late y suelta anillos
+     5.6–7 s   un anillo grande sale del cuadro
+     6.6–7.6 s el cuerpo se derrite en la frase
+     7.6–9.6 s "Sumar para / conectar" en dos líneas, acrílico inflado que respira
+     9.6–10.3  la frase se transforma en el logo de Bioferia
+     11.2–12 s se desinfla y vuelve a empezar
+   Raymarching con refracción (dispersión leve), absorción por espesor, fresnel y brillos.
+   El fondo es el sistema térmico del 2D (halos + trama), visto a través del vidrio.
+   window.T = segundos fija un instante · exportMP4() guarda el video (con server.js).
+   ========================================================================= */
+const LOOP = 12;
+const CW = 1920, CH = 1080, ASPECT = CW / CH;
+const RANGE = 0.1;
+const TEX_H = 640;
+const Q = 0.5;
+const NB = 18;
+const LINES = [['Sumar para', 0.39], ['conectar', 0.62]];   // la frase en dos líneas
+const LOGO_W = 1.0;                                          // ancho del logo (alto del cuadro = 1)
+
+const RAMP = [
+  [0.00, '#ffffff'], [0.08, '#d9f1e0'], [0.17, '#22a45f'], [0.27, '#0f3f86'],
+  [0.4, '#2a2db8'], [0.55, '#7650d8'], [0.7, '#e49be4'], [0.85, '#f6d6f4'], [1.00, '#e2f7ff'],
+];
+
+const VERT = `
+precision highp float;
+attribute vec3 aPosition; attribute vec2 aTexCoord;
+uniform mat4 uModelViewMatrix, uProjectionMatrix;
+varying vec2 vUv;
+void main(){ vUv = aTexCoord; gl_Position = uProjectionMatrix * uModelViewMatrix * vec4(aPosition, 1.0); }`;
+
+const FRAG = `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D uText, uLogo, uRamp, uHeat, uClean;
+uniform vec4 uS[${NB}];
+uniform vec4 uR[4];
+uniform vec4 uBody;
+uniform float uAspect, uRange, uTime, uK, uMorph, uDefl, uCell, uSwap;
+uniform vec2 uTexSize, uRes;
+
+const vec3 DEEP = vec3(0.06, 0.07, 0.5), DVIO = vec3(0.3, 0.12, 0.7);
+const vec3 BLUE = vec3(0.16, 0.18, 0.72), VIOLET = vec3(0.46, 0.31, 0.85), GREEN = vec3(0.13, 0.64, 0.37), PINK = vec3(0.89, 0.61, 0.89);
+const float ZB = -0.35;   // plano del fondo
+
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float smin(float a, float b, float k){ float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
+mat2 rot(float a){ float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+vec3 ramp(float h){ return texture2D(uRamp, vec2(clamp(h, 0.0, 1.0), 0.5)).rgb; }
+
+float sdf2(sampler2D tex, vec2 xy){
+  vec2 uv = vec2(xy.x / uAspect + 0.5, 0.5 - xy.y);
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return uRange;
+  vec2 px = uv * uTexSize - 0.5, f = fract(px), b = (floor(px) + 0.5) / uTexSize, o = 1.0 / uTexSize;
+  vec4 a = texture2D(tex, b), c = texture2D(tex, b + vec2(o.x, 0.0)), e = texture2D(tex, b + vec2(0.0, o.y)), g = texture2D(tex, b + o);
+  float va = (a.r * 255.0 * 256.0 + a.g * 255.0) / 65535.0, vc = (c.r * 255.0 * 256.0 + c.g * 255.0) / 65535.0;
+  float ve = (e.r * 255.0 * 256.0 + e.g * 255.0) / 65535.0, vg = (g.r * 255.0 * 256.0 + g.g * 255.0) / 65535.0;
+  return (mix(mix(va, vc, f.x), mix(ve, vg, f.x), f.y) - 0.5) * 2.0 * uRange;
+}
+
+/* ---- formas ---- */
+float dText(vec3 p){
+  vec2 q = p.xy + vec2(0.0, 0.005 * sin(p.x * 5.0 - uTime * 2.0));
+  float d2 = uSwap < 0.999 ? sdf2(uText, q) : uRange;
+  if (uSwap > 0.001) d2 = mix(d2, sdf2(uLogo, q), uSwap);
+  float di = d2 - 0.003;
+  float br = 1.0 + 0.12 * sin(p.x * 4.0 - uTime * 2.4);
+  float h = 0.065 * br * sqrt(clamp(-di / 0.03, 0.0, 1.0));
+  vec2 w = vec2(di, abs(p.z) - h);
+  return (min(max(w.x, w.y), 0.0) + length(max(w, 0.0))) * 0.6;
+}
+float dBeads(vec3 p){
+  float d = 1e3;
+  for (int i = 0; i < ${NB}; i++) d = smin(d, length(p - uS[i].xyz) - uS[i].w, uK);
+  return d;
+}
+float dBody(vec3 p){
+  vec3 q = p - uBody.xyz;
+  return length(q) - uBody.w + 0.012 * sin(q.x * 13.0 + uTime * 2.0) * sin(q.y * 11.0 - uTime * 1.7) * sin(q.z * 9.0 + uTime);
+}
+float dRings(vec3 p){
+  float d = 1e3;
+  for (int j = 0; j < 4; j++) {
+    vec3 q = p; q.yz = rot(uR[j].z) * q.yz;
+    d = min(d, length(vec2(length(q.xy) - uR[j].x, q.z)) - uR[j].y);
+  }
+  return d;
+}
+float mapS(vec3 p){ return smin(smin(dBeads(p), dBody(p), 0.07), dRings(p), 0.03); }
+float map(vec3 p){
+  float d = uMorph < 0.999 ? mapS(p) : 1e3;
+  if (uMorph > 0.001) d = mix(min(d, 0.6), dText(p), uMorph);
+  return d + uDefl * 0.06 + 0.012 * sin(3.14159 * uSwap);
+}
+vec3 calcN(vec3 p){
+  const vec2 e = vec2(1.0, -1.0) * 0.002;
+  return normalize(e.xyy * map(p + e.xyy) + e.yyx * map(p + e.yyx) + e.yxy * map(p + e.yxy) + e.xxx * map(p + e.xxx));
+}
+
+/* ---- color del acrílico según la forma ---- */
+vec3 pal(int i){
+  float m = mod(float(i), 4.0);
+  return m < 0.5 ? BLUE : (m < 1.5 ? VIOLET : (m < 2.5 ? GREEN : PINK));
+}
+vec3 tintAt(vec3 p){
+  vec3 textT = mix(DEEP, DVIO, smoothstep(-0.5, 0.5, p.x + p.y * 0.4));
+  if (uMorph > 0.999) return textT;
+  vec3 acc = vec3(0.0); float ws = 1e-4;
+  for (int i = 0; i < ${NB}; i++) { float w = exp(-max(length(p - uS[i].xyz) - uS[i].w, 0.0) * 40.0); acc += pal(i) * w; ws += w; }
+  float wb = exp(-max(dBody(p), 0.0) * 40.0);
+  acc += mix(BLUE, VIOLET, 0.5 + 0.5 * sin(uTime * 1.3 + p.y * 6.0)) * wb; ws += wb;
+  float wr = exp(-max(dRings(p), 0.0) * 40.0);
+  acc += mix(GREEN, BLUE, 0.4) * wr; ws += wr;
+  return mix(acc / ws, textT, uMorph);
+}
+
+/* ---- entorno (reflejos) y fondo térmico (lo que se ve a través) ---- */
+vec3 env(vec3 r){
+  vec3 c = mix(vec3(0.6, 0.62, 0.8), vec3(1.0), smoothstep(-0.7, 0.8, r.y) * 0.7 + 0.2);
+  c = mix(c, VIOLET, smoothstep(0.3, 0.9, -r.x) * 0.35);
+  c = mix(c, GREEN, smoothstep(0.4, 0.95, r.x) * smoothstep(0.2, -0.4, r.y) * 0.3);
+  c += smoothstep(0.86, 0.97, dot(r, normalize(vec3(-0.45, 0.65, 0.62)))) * 1.2;
+  c += smoothstep(0.9, 0.98, dot(r, normalize(vec3(0.6, 0.3, 0.75)))) * 0.6;
+  return c;
+}
+float heatAt(vec2 uv){
+  vec2 o = 1.5 / uRes;
+  float h = texture2D(uHeat, uv).r * 0.25
+    + (texture2D(uHeat, uv + vec2(o.x, 0.0)).r + texture2D(uHeat, uv - vec2(o.x, 0.0)).r
+     + texture2D(uHeat, uv + vec2(0.0, o.y)).r + texture2D(uHeat, uv - vec2(0.0, o.y)).r) * 0.125
+    + (texture2D(uHeat, uv + o).r + texture2D(uHeat, uv - o).r
+     + texture2D(uHeat, uv + vec2(o.x, -o.y)).r + texture2D(uHeat, uv + vec2(-o.x, o.y)).r) * 0.0625;
+  h += (hash(uv * uRes + uTime) - 0.5) / 255.0;
+  float v = smoothstep(0.02, 0.06, h) * max(h - 0.02, 0.0) + texture2D(uClean, uv).r;
+  return 1.0 - exp(-v * 1.8);
+}
+vec3 bgCol(vec2 uv){
+  float H = heatAt(uv);
+  vec3 col = ramp(H);
+  float a = 0.4, ca = cos(a), sa = sin(a);
+  vec2 px = uv * uRes;
+  vec2 r = vec2(ca * px.x - sa * px.y, sa * px.x + ca * px.y);
+  vec2 cell = (floor(r / uCell) + 0.5) * uCell, f = fract(r / uCell) - 0.5;
+  vec2 cp = vec2(ca * cell.x + sa * cell.y, -sa * cell.x + ca * cell.y) / uRes;
+  float Hc = heatAt(cp);
+  float rad = sqrt(Hc) * 0.75;
+  float dotM = smoothstep(rad, rad - 0.12, length(f));
+  float dots = smoothstep(0.2, 0.06, H) * step(0.012, Hc);
+  return mix(col, mix(vec3(1.0), ramp(Hc + 0.22), dotM), dots);
+}
+vec2 uvP(vec3 pb){ float s = 2.6 / (2.6 - ZB); return vec2(pb.x * s / uAspect + 0.5, 0.5 - pb.y * s); }
+vec3 bgThrough(vec3 q, vec3 d){
+  float tp = (ZB - q.z) / min(d.z, -0.05);
+  return bgCol(uvP(q + d * tp));
+}
+
+void main(){
+  vec2 sp = vec2((vUv.x - 0.5) * uAspect, 0.5 - vUv.y);
+  vec3 ro = vec3(0.0, 0.0, 2.6);
+  vec3 rd = normalize(vec3(sp, -2.6));
+  float t = 1.0, d = 1.0;
+  bool hit = false;
+  for (int i = 0; i < 130; i++) {
+    d = map(ro + rd * t);
+    if (d < 0.0007) { hit = true; break; }
+    t += max(d * 0.75, 0.0015);
+    if (t > 3.8) break;
+  }
+  float g = hash(gl_FragCoord.xy + fract(uTime) * 91.0) - 0.5;
+  vec3 col;
+  if (hit) {
+    vec3 p = ro + rd * t;
+    vec3 n = calcN(p);
+    float cosi = clamp(dot(n, -rd), 0.0, 1.0);
+    float F = 0.04 + 0.96 * pow(1.0 - cosi, 5.0);
+    vec3 refl = env(reflect(rd, n));
+    // atravesar el acrílico: espesor y punto de salida
+    vec3 ri = refract(rd, n, 1.0 / 1.49);
+    vec3 q = p - n * 0.004;
+    float th = 0.0;
+    for (int k = 0; k < 40; k++) {
+      float di = -map(q);
+      if (di < 0.0008) break;
+      float s = max(di * 0.8, 0.003);
+      q += ri * s; th += s;
+      if (th > 0.7) break;
+    }
+    vec3 no = calcN(q);
+    vec3 trans;
+    vec3 oR = refract(ri, -no, 1.47), oG = refract(ri, -no, 1.49), oB = refract(ri, -no, 1.52);
+    if (dot(oG, oG) < 0.25) { vec3 rr = reflect(ri, -no); trans = env(rr) * 0.8; }
+    else trans = vec3(bgThrough(q, oR).r, bgThrough(q, oG).g, bgThrough(q, oB).b);
+    vec3 tint = tintAt(p);
+    trans *= exp(-(1.0 - tint) * min(th, 0.3) * mix(4.5, 26.0, uMorph));
+    col = mix(trans, refl, F);
+    col += mix(tint, mix(VIOLET, PINK, 0.3), uMorph) * pow(1.0 - cosi, 2.0) * 0.22;                                       // borde que se ilumina
+    col += pow(max(dot(reflect(rd, n), normalize(vec3(-0.45, 0.65, 0.62))), 0.0), 90.0) * 0.9;
+    col += pow(max(dot(reflect(rd, n), normalize(vec3(0.6, 0.3, 0.75))), 0.0), 60.0) * 0.35;
+    col += g * 0.03;
+  } else {
+    col = bgCol(vUv);
+    col += g * 0.035 * smoothstep(0.995, 0.9, col.g);
+  }
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+let sh, texText, texLogo, rampG, heat, hctx, clean, cctx, logoPaths = null, logoVB = null, ready = false, lastT = null;
+
+function setup() {
+  pixelDensity(1);
+  createCanvas(CW, CH, WEBGL).parent('stage');
+  sh = createShader(VERT, FRAG);
+  rampG = createGraphics(256, 1); rampG.pixelDensity(1);
+  const rc = rampG.drawingContext, gr = rc.createLinearGradient(0, 0, 256, 0);
+  RAMP.forEach(([p, c]) => gr.addColorStop(p, c));
+  rc.fillStyle = gr; rc.fillRect(0, 0, 256, 1);
+  heat = createGraphics(Math.round(CW * Q), Math.round(CH * Q)); heat.pixelDensity(1); hctx = heat.drawingContext;
+  hctx.fillStyle = '#000'; hctx.fillRect(0, 0, heat.width, heat.height);
+  clean = createGraphics(Math.round(CW * Q), Math.round(CH * Q)); clean.pixelDensity(1); cctx = clean.drawingContext;
+  build();
+}
+
+/* ---------- campo de distancia: frase + logo (misma composición que el 2D) ---------- */
+async function build() {
+  await document.fonts.load('800 100px "Bricolage Grotesque"');
+  const svg = await (await fetch('../assets/bioferia-logo.svg')).text();
+  const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+  logoVB = doc.documentElement.getAttribute('viewBox').split(/\s+/).map(Number);
+  logoPaths = [...doc.querySelectorAll('path')].map((p) => new Path2D(p.getAttribute('d')));
+  const tw = Math.round(TEX_H * ASPECT), th = TEX_H;
+  texText = sdfTexture(tw, th, (c) => {
+    c.font = `800 ${th * 0.25}px "Bricolage Grotesque"`;
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    LINES.forEach(([txt, y]) => c.fillText(txt, tw / 2, th * y));
+  });
+  texLogo = sdfTexture(tw, th, (c) => {
+    const lw = th * LOGO_W, s = lw / logoVB[2];
+    c.translate(tw / 2 - lw / 2, th / 2 - (logoVB[3] * s) / 2); c.scale(s, s); logoPaths.forEach((p) => c.fill(p));
+  });
+  ready = true;
+}
+function sdfTexture(w, h, drawFn) {
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const c = cv.getContext('2d', { willReadFrequently: true });
+  c.fillStyle = '#000'; c.fillRect(0, 0, w, h);
+  c.fillStyle = '#fff';
+  drawFn(c);
+  const a = c.getImageData(0, 0, w, h).data, N = w * h, INF = 1e20;
+  const inside = new Float64Array(N), outside = new Float64Array(N);
+  for (let i = 0; i < N; i++) { const on = a[i * 4] > 127; outside[i] = on ? 0 : INF; inside[i] = on ? INF : 0; }
+  edt(outside, w, h); edt(inside, w, h);
+  const sd = new Float32Array(N);
+  for (let i = 0; i < N; i++) sd[i] = Math.sqrt(outside[i]) - Math.sqrt(inside[i]);
+  const br = Math.max(1, Math.round(h * 0.004));
+  boxBlur(sd, w, h, br); boxBlur(sd, w, h, br);
+  const g = createGraphics(w, h); g.pixelDensity(1);
+  const img = g.drawingContext.createImageData(w, h);
+  for (let i = 0; i < N; i++) {
+    const v = Math.max(0, Math.min(65535, Math.round(((sd[i] / h) / RANGE * 0.5 + 0.5) * 65535)));
+    img.data[i * 4] = v >> 8; img.data[i * 4 + 1] = v & 255; img.data[i * 4 + 2] = 0; img.data[i * 4 + 3] = 255;
+  }
+  g.drawingContext.putImageData(img, 0, 0);
+  _renderer.getTexture(g).setInterpolation(NEAREST, NEAREST);
+  return g;
+}
+function boxBlur(a, w, h, r) {
+  const tmp = new Float32Array(a.length), k = 1 / (2 * r + 1);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let s = 0; for (let j = -r; j <= r; j++) s += a[y * w + Math.min(w - 1, Math.max(0, x + j))]; tmp[y * w + x] = s * k;
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let s = 0; for (let j = -r; j <= r; j++) s += tmp[Math.min(h - 1, Math.max(0, y + j)) * w + x]; a[y * w + x] = s * k;
+  }
+}
+function edt(grid, w, h) {
+  const n = Math.max(w, h), f = new Float64Array(n), d = new Float64Array(n), v = new Int32Array(n), z = new Float64Array(n + 1);
+  for (let x = 0; x < w; x++) { for (let y = 0; y < h; y++) f[y] = grid[y * w + x]; dt1(f, h, d, v, z); for (let y = 0; y < h; y++) grid[y * w + x] = d[y]; }
+  for (let y = 0; y < h; y++) { for (let x = 0; x < w; x++) f[x] = grid[y * w + x]; dt1(f, w, d, v, z); for (let x = 0; x < w; x++) grid[y * w + x] = d[x]; }
+}
+function dt1(f, n, d, v, z) {
+  let k = 0; v[0] = 0; z[0] = -1e20; z[1] = 1e20;
+  for (let q = 1; q < n; q++) {
+    let s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+    while (s <= z[k]) { k--; s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]); }
+    k++; v[k] = q; z[k] = s; z[k + 1] = 1e20;
+  }
+  k = 0;
+  for (let q = 0; q < n; q++) { while (z[k + 1] < q) k++; d[q] = (q - v[k]) * (q - v[k]) + f[v[k]]; }
+}
+
+/* ---------- utilidades ---------- */
+const TAU = Math.PI * 2;
+const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const mod = (a, n) => ((a % n) + n) % n;
+const gauss = (x, c, w) => { const q = (x - c) / w; return Math.exp(-q * q); };
+const lerp = (a, b, k) => a + (b - a) * k;
+const rnd = (n) => { const v = Math.sin(n * 12.9898) * 43758.5453; return v - Math.floor(v); };
+const HI = (v) => `rgb(${Math.round(255 * Math.min(1, Math.max(0, v)))},0,0)`;
+// de 3D (alto del cuadro = 1, plano z = 0) a píxeles de las capas térmicas
+function proj(x, y, z) { const k = 2.6 / (2.6 - z), H = heat.height; return [heat.width / 2 + x * k * H, H / 2 - y * k * H, k * H]; }
+
+const BEADS = Array.from({ length: NB }, (_, i) => ({
+  a: (i / NB) * TAU + rnd(i) * 0.4, d: 1.25 + rnd(i + 3) * 0.5, delay: rnd(i + 7) * 1.2,
+  z: (rnd(i + 17) - 0.45) * 1.6, r: 0.026 + rnd(i + 11) * 0.03, curl: (rnd(i + 13) - 0.5) * 1.6,
+}));
+
+/* ---------- estado de un instante: formas 3D + capas térmicas del fondo ---------- */
+function scene(t) {
+  const fadeAll = 1 - sm(6.6, 7.4, t);
+  const body = sm(1.6, 4.2, t);
+  const beat = gauss(mod(t, 1.0), 0.12, 0.06) + 0.6 * gauss(mod(t, 1.0), 0.32, 0.06);
+  const morph = sm(6.6, 7.6, t), swap = sm(9.6, 10.3, t), defl = sm(11.2, 11.9, t);
+  const S = [], R = [];
+
+  for (let i = 0; i < NB; i++) {
+    const p = BEADS[i], k = sm(p.delay, p.delay + 3.0, t);
+    if (k >= 0.999 || t > 7.5) { S.push(0, 0, 50, 0.01); continue; }
+    const a = p.a + p.curl * k, rr = p.d * (1 - k);
+    const x = Math.cos(a) * rr * 1.07, y = Math.sin(a) * rr * 0.66, z = p.z * (1 - k) + 0.02 * Math.sin(t * 2 + i);
+    S.push(x, y, z, p.r * (0.6 + 0.4 * (1 - k * k)));
+  }
+  const bodyR = (0.04 + 0.13 * body + 0.02 * beat * body) * sm(1.5, 2.3, t);
+  const B = bodyR > 0.002 ? [0, 0, 0, bodyR] : [0, 0, 50, 0.01];
+
+  for (let j = 0; j < 3; j++) {
+    const lt = mod(t - j * 1.0, 3.0), k = body * fadeAll * Math.exp(-lt * 1.2);
+    if (k < 0.02 || t > 7.4) { R.push(50, 0.001, 0, 0); continue; }
+    R.push(0.2 + lt * 0.3, 0.013 * k, 0.64, 0);
+  }
+  const big = t - 5.6;
+  if (big > 0 && big < 2.4) R.push(0.25 + Math.pow(big, 0.8) * 0.9, 0.034 * Math.exp(-big * 0.7) * sm(0, 0.15, big), 0.64, 0);
+  else R.push(50, 0.001, 0, 0);
+
+  return { S, R, B, body, beat, morph, swap, defl, fadeAll, big };
+}
+
+function layers(t, st) {
+  const W = heat.width, H = heat.height, c = hctx;
+  // estela de las cuentas
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.globalCompositeOperation = 'source-over'; c.filter = 'none';
+  c.fillStyle = 'rgba(0,0,0,0.1)'; c.fillRect(0, 0, W, H);
+  c.globalCompositeOperation = 'lighter';
+  c.filter = `blur(${H * 0.012}px)`;
+  for (let i = 0; i < NB; i++) {
+    const [x, y, z, r] = st.S.slice(i * 4, i * 4 + 4);
+    if (z > 10) continue;
+    const [sx, sy, k] = proj(x, y, z), rr = r * k * 2.2;
+    const g = c.createRadialGradient(sx, sy, 0, sx, sy, rr);
+    g.addColorStop(0, HI(0.022 * st.fadeAll)); g.addColorStop(1, 'rgb(0,0,0)');
+    c.fillStyle = g; c.beginPath(); c.arc(sx, sy, rr, 0, TAU); c.fill();
+  }
+  c.filter = 'none';
+
+  // capa limpia: halo del cuerpo, de los anillos y de la frase
+  const b = cctx;
+  b.setTransform(1, 0, 0, 1, 0, 0); b.globalCompositeOperation = 'source-over'; b.filter = 'none';
+  b.fillStyle = '#000'; b.fillRect(0, 0, W, H); b.globalCompositeOperation = 'lighter';
+  const cx = W / 2, cy = H / 2;
+  const bodyHalo = st.body * (1 - st.morph * 0.85);
+  if (bodyHalo > 0.01) {
+    const Rr = H * (0.1 + 0.22 * st.body + 0.03 * st.beat * st.body);
+    b.filter = `blur(${H * 0.04}px)`;
+    const g = b.createRadialGradient(cx, cy, 0, cx, cy, Rr);
+    for (let i = 0; i <= 12; i++) { const u = i / 12; g.addColorStop(u, HI((0.1 + 0.05 * st.beat) * bodyHalo * Math.exp(-u * u * 3.2) * (1 - u))); }
+    b.fillStyle = g; b.beginPath(); b.ellipse(cx, cy, Rr * 1.25, Rr, 0, 0, TAU); b.fill();
+  }
+  b.filter = `blur(${H * 0.03}px)`;
+  for (let j = 0; j < 4; j++) {
+    const [r, m] = st.R.slice(j * 4, j * 4 + 2);
+    if (r > 10 || m < 0.002) continue;
+    const k = m / (j === 3 ? 0.034 : 0.013);
+    b.strokeStyle = HI((j === 3 ? 0.6 : 0.28) * k); b.lineWidth = H * (j === 3 ? 0.1 + st.big * 0.05 : 0.035);
+    b.beginPath(); b.ellipse(cx, cy, r * H * 1.0, r * H * Math.cos(0.64), 0, 0, TAU); b.stroke();
+  }
+  const e = st.morph * (1 - st.defl);
+  if (e > 0.01) {
+    b.font = `800 ${H * 0.25}px "Bricolage Grotesque"`; b.textAlign = 'center'; b.textBaseline = 'middle';
+    b.filter = `blur(${H * 0.045}px)`; b.fillStyle = HI(0.22 * e * (1 - st.swap));
+    LINES.forEach(([txt, y]) => b.fillText(txt, cx, H * (y + 0.015)));
+    if (logoPaths && st.swap > 0.01) {
+      const lw = H * LOGO_W, s = lw / logoVB[2];
+      b.save(); b.translate(cx - lw / 2, H / 2 - (logoVB[3] * s) / 2 + H * 0.015); b.scale(s, s); b.fillStyle = HI(0.22 * e * st.swap); logoPaths.forEach((p) => b.fill(p)); b.restore();
+    }
+  }
+  b.filter = 'none';
+}
+
+/* ---------- dibujo ---------- */
+function render(t, st) {
+  shader(sh);
+  sh.setUniform('uText', texText);
+  sh.setUniform('uLogo', texLogo);
+  sh.setUniform('uSwap', st.swap);
+  sh.setUniform('uRamp', rampG);
+  sh.setUniform('uHeat', heat);
+  sh.setUniform('uClean', clean);
+  sh.setUniform('uS', st.S);
+  sh.setUniform('uR', st.R);
+  sh.setUniform('uBody', st.B);
+  sh.setUniform('uK', 0.04 + 0.05 * st.body);
+  sh.setUniform('uMorph', st.morph);
+  sh.setUniform('uDefl', st.defl);
+  sh.setUniform('uAspect', ASPECT);
+  sh.setUniform('uRange', RANGE);
+  sh.setUniform('uTime', t);
+  sh.setUniform('uCell', CH / 90);
+  sh.setUniform('uTexSize', [texText.width, texText.height]);
+  sh.setUniform('uRes', [CW, CH]);
+  noStroke();
+  rect(-width / 2, -height / 2, width, height);
+}
+function frame(t, draw = true) { const st = scene(t); layers(t, st); if (draw) render(t, st); }
+
+function draw() {
+  if (!ready) { background(255); return; }
+  const t = mod(window.T != null ? window.T : millis() / 1000, LOOP);
+  if (window.T != null && lastT !== window.T) { for (let i = 45; i >= 1; i--) frame(mod(t - i / 30, LOOP), false); }
+  frame(t);
+  lastT = window.T;
+}
+
+/* ---------- exportar MP4 (requiere node server.js) ---------- */
+async function exportMP4(name = 'tagline-3d-acrilico-sumar-para-conectar-1920x1080.mp4', fps = 30) {
+  const { Muxer, ArrayBufferTarget } = await import('https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/+esm');
+  const muxer = new Muxer({ target: new ArrayBufferTarget(), video: { codec: 'avc', width: CW, height: CH }, fastStart: 'in-memory' });
+  const enc = new VideoEncoder({ output: (c, m) => muxer.addVideoChunk(c, m), error: (e) => console.error(e) });
+  enc.configure({ codec: 'avc1.640028', width: CW, height: CH, bitrate: 24e6, framerate: fps });
+  const copy = document.createElement('canvas'); copy.width = CW; copy.height = CH;
+  const cc = copy.getContext('2d'), gl = drawingContext.canvas, total = LOOP * fps;
+  noLoop();
+  for (let f = -fps * 2; f < 0; f++) frame(mod(f / fps, LOOP), false);
+  for (let f = 0; f < total; f++) {
+    const t = f / fps; frame(t); cc.drawImage(gl, 0, 0);
+    const vf = new VideoFrame(copy, { timestamp: Math.round((f * 1e6) / fps), duration: Math.round(1e6 / fps) });
+    enc.encode(vf, { keyFrame: f % fps === 0 }); vf.close();
+    if (enc.encodeQueueSize > 4) await new Promise((r) => setTimeout(r, 0));
+  }
+  await enc.flush(); muxer.finalize();
+  await fetch('/export?name=' + encodeURIComponent(name), { method: 'POST', body: new Blob([muxer.target.buffer], { type: 'video/mp4' }) });
+  loop();
+  return name;
+}
+</script>
+</body>
+</html>

@@ -150,6 +150,13 @@ function burnText(c, txt, x, y, font, heatV, inkV, S, blur = 0.04) {
   k.restore();
 }
 
+// sombra negra suave y desplazada (solo asoma por fuera de la forma)
+function inkShadow(draw, dx, dy, blur, v) {
+  const k = ictx;
+  k.save(); k.filter = `blur(${blur}px)`; k.translate(dx, dy); k.fillStyle = INK(v); draw(k); k.restore();
+  k.save(); k.globalCompositeOperation = 'destination-out'; k.filter = 'none'; k.fillStyle = '#fff'; draw(k); k.restore();
+}
+
 /* ---------- un cuadro ---------- */
 const CHARS = 'IMPACTOCAMBIAHUELLAMUEVETRANSFORMA';
 function heatFrame(t) {
@@ -238,28 +245,23 @@ function heatFrame(t) {
         c.fillStyle = HI(e === 0 ? 0.12 * wenv : 0.025 * wenv);
         c.fillText('IMPACTO', W / 2 - e * S * 0.025, H * 0.47);
       }
-      // contorno negro (tinta) alrededor de las letras
-      ictx.font = c.font; ictx.textAlign = 'center'; ictx.textBaseline = 'middle'; ictx.filter = 'none';
-      ictx.strokeStyle = INK(0.95 * wenv); ictx.lineWidth = S * 0.02; ictx.lineJoin = 'round';
-      ictx.strokeText('IMPACTO', W / 2, H * 0.47);
-      ictx.globalCompositeOperation = 'destination-out'; ictx.fillStyle = '#fff';   // el contorno queda solo por fuera
-      ictx.fillText('IMPACTO', W / 2, H * 0.47);
-      ictx.globalCompositeOperation = 'lighter';
+      // sombra negra suave desplazada
+      inkShadow((k) => { k.font = c.font; k.textAlign = 'center'; k.textBaseline = 'middle'; k.fillText('IMPACTO', W / 2, H * 0.47); },
+        S * 0.018, S * 0.022, S * 0.006, 0.85 * wenv);
     }
 
     // bajada y logo (como en Vínculo)
     const benv = sm(3.6, 4.3, age) * (1 - sm(7.0, 8.0, age));
     if (benv > 0.01) {
+      const font = `600 ${S * 0.065}px "Instrument Sans"`;
       c.filter = `blur(${S * 0.004}px)`;
-      c.font = `600 ${S * 0.065}px "Instrument Sans"`;
-      c.textAlign = 'center'; c.textBaseline = 'middle';
-      ictx.font = c.font; ictx.textAlign = 'center'; ictx.textBaseline = 'middle'; ictx.filter = 'none';
-      ictx.fillStyle = INK(0.95 * benv); ictx.fillText('El cambio', W / 2, H * 0.8);
+      c.font = font; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillStyle = HI(0.09 * benv);
+      c.fillText('El cambio', W / 2, H * 0.8);
       if (logoPaths) {
         const lw = S * 0.32, sc = lw / logoVB[2];
-        ictx.save(); ictx.translate(W / 2 - lw / 2, H * 0.865); ictx.scale(sc, sc);
-        ictx.fillStyle = INK(0.95 * benv); logoPaths.forEach((p) => ictx.fill(p));
-        ictx.restore();
+        const drawLogo = (k) => { k.save(); k.translate(W / 2 - lw / 2, H * 0.865); k.scale(sc, sc); logoPaths.forEach((p) => k.fill(p)); k.restore(); };
+        c.fillStyle = HI(0.08 * benv); drawLogo(c);
       }
     }
   }

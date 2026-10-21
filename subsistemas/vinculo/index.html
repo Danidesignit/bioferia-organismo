@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Bioferia · Vínculo</title>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&family=Instrument+Sans:wght@500..600&display=swap">
   <style>
     html, body { margin: 0; height: 100%; background: #2b2b2b; overflow: hidden; }
     main { height: 100%; display: grid; place-items: center; }
@@ -16,16 +16,20 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
 <script>
 /* =========================================================================
-   VÍNCULO · "el tacto que queda"   (16:9 · loop de 12 s)
-   Misma familia que Pulso (calor + estela + trama + isolíneas + grano).
-     0–6 s   dos manos entran desde bordes opuestos, unidas por un cordón con
-             cuentas que viajan (la señal de uno a otro, como un sifonóforo).
-     6 s     el contacto: el cordón se tensa, se enrolla y se trenza.
-     8.5–11.5 mientras las manos se retiran, queda escrita la palabra.
-     12 s    el cordón se afloja → vuelve al inicio (loop exacto).
+   VÍNCULO · "lo que nos une se construye de a partes"   (16:9 · loop de 18 s)
+   Misma familia que Pulso e Impacto (calor + estela + trama + isolíneas + grano).
+     0–3 s     la viruta: una tira continua se desenrolla en espiral desde un borde.
+     2–4.5 s   el encuentro: otra tira llega del otro lado, con otro ritmo.
+     4–6 s     se trenzan: las dos tiras se enroscan entre sí.
+     6–9 s     los eslabones: la trenza se vuelve cadena; cada eslabón es distinto
+               (unidades de un mismo organismo, como el sifonóforo).
+     8–10 s    el rastro: dos manos en trama tiran de los extremos y la cadena se tensa.
+     10–15.5 s la palabra: la cadena rodea VINCULO y un hilo la cose;
+               aparecen la bajada "La conexión" y el logo.
+     15.5–18 s todo se desarma y vuelve a empezar (loop exacto).
    window.T = segundos fija un instante · exportMP4() guarda el video (con server.js).
    ========================================================================= */
-const LOOP = 12;
+const LOOP = 18;
 const CW = 1920, CH = 1080;
 const Q = 0.5;
 
@@ -52,17 +56,16 @@ float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32);
 float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
   return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y); }
 vec3 ramp(float h){ return texture2D(uRamp, vec2(clamp(h, 0.0, 1.0), 0.5)).rgb; }
-float heatAt(vec2 uv){ return 1.0 - exp(-texture2D(uHeat, uv).r * 1.7); }
+// se descuenta el residuo mínimo de la estela (redondeo de 8 bits) para que no queden fantasmas
+float heatAt(vec2 uv){ return 1.0 - exp(-max(texture2D(uHeat, uv).r - 0.03, 0.0) * 1.8); }
 void main(){
   vec2 uv = vUv;
   float fr = floor(uTime * 24.0), row = floor(uv.y * 70.0);
   uv.x += uGlitch * (hash(vec2(row, fr)) - 0.5) * 0.05 * step(0.82, hash(vec2(row * 1.7, fr + 3.0)));
   vec2 wp = uv * vec2(6.0, 3.4);
-  uv += (vec2(vnoise(wp + uTime * 0.35), vnoise(wp + 7.3 - uTime * 0.3)) - 0.5) * 0.022;
+  uv += (vec2(vnoise(wp + uTime * 0.35), vnoise(wp + 7.3 - uTime * 0.3)) - 0.5) * 0.018;
   float h = heatAt(uv);
   float g = hash(gl_FragCoord.xy + fract(uTime) * 91.0) - 0.5;
-
-  // trama de puntos para el calor que se apaga
   float a = 0.4, ca = cos(a), sa = sin(a);
   vec2 px = vec2(uv.x * uRes.x, uv.y * uRes.y);
   vec2 r = vec2(ca * px.x - sa * px.y, sa * px.x + ca * px.y);
@@ -72,26 +75,23 @@ void main(){
   float rad = sqrt(hc) * 0.7;
   float dotM = smoothstep(rad, rad - 0.12, length(f));
   float dots = smoothstep(0.34, 0.1, h) * step(0.015, hc);
-
   vec3 solid = ramp(h + g * 0.05);
   vec3 dotCol = mix(ramp(0.0), ramp(clamp(0.22 + hc * 1.4, 0.0, 1.0)), dotM);
   vec3 col = mix(solid, dotCol, dots);
-
-  // isolíneas sutiles (cian / rosa)
   float b = h * 7.0, fb = fract(b), d = min(fb, 1.0 - fb);
   float line = (1.0 - smoothstep(0.01, 0.045, d)) * smoothstep(0.3, 0.45, h);
   col = mix(col, mod(floor(b + 0.5), 2.0) < 1.0 ? vec3(0.25, 0.95, 1.0) : vec3(1.0, 0.45, 0.85), line * 0.5);
-
   col += g * 0.04 * smoothstep(0.0, 0.05, h + dots * hc);
   gl_FragColor = vec4(col, 1.0);
 }`;
 
-let sh, heat, hctx, rampG, lastT = null;
+let sh, heat, hctx, rampG, logoPaths = null, logoVB = null, lastT = null;
 
 function setup() {
   pixelDensity(1);
   createCanvas(CW, CH, WEBGL).parent('stage');
   document.fonts.load('800 100px "Bricolage Grotesque"');
+  document.fonts.load('600 40px "Instrument Sans"');
   sh = createShader(VERT, FRAG);
   heat = createGraphics(Math.round(CW * Q), Math.round(CH * Q)); heat.pixelDensity(1);
   hctx = heat.drawingContext;
@@ -100,175 +100,205 @@ function setup() {
   const rc = rampG.drawingContext, gr = rc.createLinearGradient(0, 0, 256, 0);
   RAMP.forEach(([p, c]) => gr.addColorStop(p, c));
   rc.fillStyle = gr; rc.fillRect(0, 0, 256, 1);
+  fetch('../../assets/bioferia-logo.svg').then((r) => r.text()).then((svg) => {
+    const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+    logoVB = doc.documentElement.getAttribute('viewBox').split(/\s+/).map(Number);
+    logoPaths = [...doc.querySelectorAll('path')].map((p) => new Path2D(p.getAttribute('d')));
+  }).catch(() => {});
 }
 
+const TAU = Math.PI * 2;
 const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 const mod = (a, n) => ((a % n) + n) % n;
 const gauss = (x, c, w) => { const q = (x - c) / w; return Math.exp(-q * q); };
-const TAU = Math.PI * 2;
-
-function heatRGB(v) { return `rgb(${Math.round(255 * Math.min(1, Math.max(0, v)))},0,0)`; }
-function limb(c, x1, y1, x2, y2, w, v) { c.strokeStyle = heatRGB(v); c.lineWidth = w; c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.stroke(); }
+const lerp = (a, b, k) => a + (b - a) * k;
+const rnd = (n) => { const v = Math.sin(n * 12.9898) * 43758.5453; return v - Math.floor(v); };
+const heatRGB = (v) => `rgb(${Math.round(255 * Math.min(1, Math.max(0, v)))},0,0)`;
 function oval(c, x, y, rx, ry, rot, v) { c.fillStyle = heatRGB(v); c.beginPath(); c.ellipse(x, y, rx, ry, rot, 0, TAU); c.fill(); }
-function polyline(c, pts) { c.beginPath(); pts.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y))); }
+function limb(c, x1, y1, x2, y2, w, v) { c.strokeStyle = heatRGB(v); c.lineWidth = w; c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.stroke(); }
 
-/* ---------- mano que entra desde un borde, como en "La creación de Adán" ----------
-   side -1 = izquierda (mano relajada, dedos caídos) · side 1 = derecha (señala con el índice)
-   Devuelve { tip: punta del índice, wrist: muñeca } para atar el cordón. */
-function hand(c, side, y, reach, S, W, ph, v) {
-  const dir = -side;                                        // hacia el centro
-  const wx = side < 0 ? -S * 0.12 + reach * W * 0.3 : W + S * 0.12 - reach * W * 0.3;
-  // antebrazo: entra desde fuera del cuadro y se afina hacia la muñeca
-  limb(c, wx - dir * S * 0.55, y + S * 0.05, wx - dir * S * 0.2, y + S * 0.02, S * 0.13, v * 0.8);
-  limb(c, wx - dir * S * 0.2, y + S * 0.02, wx, y, S * 0.1, v * 0.85);
-  // palma
-  oval(c, wx + dir * S * 0.07, y + S * 0.005, S * 0.085, S * 0.062, dir * 0.08, v);
-  const kx = wx + dir * S * 0.13;                           // línea de nudillos
-  const relax = side < 0;
-  // [desplazamiento vertical, largo, ancho, flexión por falange]
-  const F = relax
-    ? [[-0.04, 0.2, 0.034, 0.22], [-0.012, 0.21, 0.035, 0.32], [0.016, 0.19, 0.033, 0.4], [0.042, 0.15, 0.03, 0.48]]
-    : [[-0.04, 0.22, 0.035, 0.03], [-0.012, 0.15, 0.035, 0.95], [0.016, 0.14, 0.033, 1.0], [0.042, 0.12, 0.03, 1.05]];
-  let tip = [0, 0];
-  F.forEach(([oy, L, w, bend], i) => {
-    const breathe = 0.06 * Math.sin(ph * 2 + i * 0.8);
-    let a = dir > 0 ? 0 : Math.PI;
-    let x = kx, yy = y + oy * S;
-    const segs = [0.42, 0.33, 0.25];
-    segs.forEach((sl, j) => {
-      a += dir * (bend + breathe) * (j === 0 ? 0.5 : 1);    // dobla hacia abajo, más en las últimas falanges
-      const nx = x + Math.cos(a) * L * S * 1.3 * sl, ny = yy + Math.sin(a) * L * S * 1.3 * sl;
-      limb(c, x, yy, nx, ny, w * S * 1.15 * (1 - j * 0.12), v);
-      x = nx; yy = ny;
-    });
-    if (i === 0) tip = [x, yy];
+/* ---------- recorridos ---------- */
+function bez(p0, p1, p2, s) { const u = 1 - s; return [u * u * p0[0] + 2 * u * s * p1[0] + s * s * p2[0], u * u * p0[1] + 2 * u * s * p1[1] + s * s * p2[1]]; }
+// devuelve [x, y, nx, ny] (punto y normal) para un recorrido f(s)
+function frame(f, s) {
+  const a = f(Math.max(0, s - 0.004)), b = f(Math.min(1, s + 0.004)), p = f(s);
+  const tx = b[0] - a[0], ty = b[1] - a[1], d = Math.hypot(tx, ty) || 1;
+  return [p[0], p[1], -ty / d, tx / d];
+}
+
+/* ---------- la viruta: tira que gira sobre sí misma (ancho visible según cómo mira) ---------- */
+function strand(c, path, s0, s1, R, turns, phase, w, v, t) {
+  const N = 160;
+  let prev = null;
+  for (let i = 0; i <= N; i++) {
+    const s = s0 + (s1 - s0) * (i / N);
+    const [x, y, nx, ny] = frame(path, s);
+    const th = s * turns * TAU + phase + t * 0.8;
+    const off = R * Math.sin(th), depth = Math.cos(th);
+    const px = x + nx * off, py = y + ny * off;
+    if (prev) {
+      const face = Math.abs(Math.cos(th * 0.5 + 0.7));           // la tira se ve ancha o de canto
+      c.lineWidth = w * (0.22 + 0.78 * face) * (0.6 + 0.4 * (i / N));
+      c.strokeStyle = heatRGB(v * (0.55 + 0.45 * (depth * 0.5 + 0.5)));
+      c.beginPath(); c.moveTo(prev[0], prev[1]); c.lineTo(px, py); c.stroke();
+    }
+    prev = [px, py];
+  }
+}
+
+/* ---------- un eslabón ---------- */
+function link(c, x, y, rx, ry, rot, w, v) {
+  c.strokeStyle = heatRGB(v); c.lineWidth = w;
+  c.beginPath(); c.ellipse(x, y, rx, Math.max(0.5, ry), rot, 0, TAU); c.stroke();
+}
+
+/* ---------- mano en trama (rastro breve) ---------- */
+function hand(c, x, y, dir, S, v, grip) {
+  oval(c, x - dir * S * 0.09, y, S * 0.13, S * 0.1, 0, v);                       // palma
+  limb(c, x - dir * S * 0.35, y + S * 0.03, x - dir * S * 0.12, y + S * 0.01, S * 0.12, v * 0.8);   // antebrazo
+  [-0.06, -0.02, 0.02, 0.06].forEach((oy, i) => {                               // dedos que se cierran sobre la cadena
+    const a = (dir > 0 ? 0 : Math.PI) + dir * (0.15 + grip * 1.1);
+    const sx = x + dir * S * 0.02, sy = y + oy * S;
+    const L = S * (0.1 + (i === 1 || i === 2 ? 0.02 : 0));
+    const mx = sx + Math.cos(dir > 0 ? 0 : Math.PI) * L * 0.5, my = sy;
+    limb(c, sx, sy, mx, my, S * 0.03, v);
+    limb(c, mx, my, mx + Math.cos(a) * L * 0.5, my + Math.sin(a) * L * 0.5 * dir, S * 0.027, v);
   });
-  // pulgar: sale de la base de la palma, hacia adelante y abajo
-  let ta = (dir > 0 ? 0 : Math.PI) + dir * 0.65, tx = wx + dir * S * 0.05, ty = y + S * 0.04;
-  [0.09, 0.07].forEach((L, j) => {
-    ta -= dir * 0.3 * j;
-    const nx = tx + Math.cos(ta) * L * S, ny = ty + Math.sin(ta) * L * S;
-    limb(c, tx, ty, nx, ny, S * 0.038, v);
-    tx = nx; ty = ny;
-  });
-  return { tip, wrist: [wx - dir * S * 0.03, y + S * 0.01] };
 }
 
 /* ---------- un cuadro de calor ---------- */
 function heatFrame(t) {
   const W = heat.width, H = heat.height, S = H, c = hctx;
-  const p = t / LOOP, ph = p * TAU;
   c.setTransform(1, 0, 0, 1, 0, 0);
   c.globalCompositeOperation = 'source-over'; c.filter = 'none';
-  c.fillStyle = 'rgba(0,0,0,0.13)'; c.fillRect(0, 0, W, H);
+  c.fillStyle = 'rgba(0,0,0,0.12)'; c.fillRect(0, 0, W, H);
   c.globalCompositeOperation = 'lighter';
   c.lineCap = 'round'; c.lineJoin = 'round';
 
-  // tiras de fondo: cruzan todo el cuadro y se disuelven en trama
+  // fondo: tiras anchas muy suaves que cruzan el cuadro (familia de Vínculo)
   c.filter = `blur(${S * 0.04}px)`;
   for (let i = 0; i < 3; i++) {
-    const pts = [];
+    c.strokeStyle = heatRGB(0.0085); c.lineWidth = S * 0.1;
+    c.beginPath();
     for (let k = 0; k <= 40; k++) {
       const x = (k / 40) * (W + S * 0.4) - S * 0.2;
-      pts.push([x, H * (0.22 + i * 0.3) + Math.sin((x / W) * TAU + ph + i * 2) * S * 0.12 + Math.sin(ph * 2 + i) * S * 0.04]);
+      const y = H * (0.22 + i * 0.3) + Math.sin((x / W) * TAU + (t / LOOP) * TAU + i * 2) * S * 0.12;
+      k ? c.lineTo(x, y) : c.moveTo(x, y);
     }
-    c.strokeStyle = heatRGB(0.014); c.lineWidth = S * 0.1;
-    polyline(c, pts); c.stroke();
+    c.stroke();
   }
 
-  // las manos: se acercan hasta tocarse a los 6 s y se retiran (0 → 1 → 0)
-  const reachAt = (q) => { q = mod(q, 1); return sm(0.0, 0.3, q) * (1 - sm(0.78, 1.0, q)); };
-  const reach = reachAt(p);
-  c.filter = `blur(${S * 0.009}px)`;
-  const env = 0.024 * (1 - 0.75 * sm(0.36, 0.44, p) * (1 - sm(0.86, 0.96, p)));
-  const yl = H * 0.58 + Math.sin(ph * 2) * S * 0.03, yr = H * 0.42 + Math.sin(ph * 2 + 1) * S * 0.03;
-  let HA, HB;
-  for (let e = 1; e >= 0; e--) {                              // un eco del movimiento
-    const pe = ph - e * 0.05, re = reachAt(p - e * 0.008);
-    HA = hand(c, -1, yl, re, S, W, pe, env * (1 - e * 0.6));
-    HB = hand(c, 1, yr, re, S, W, pe, env * (1 - e * 0.6));
-  }
-  const A = HA.tip, B = HB.tip;
-
-  // el cordón: une las dos puntas, cuelga cuando están lejos y se tensa al tocarse
-  const tension = reach;
-  const braid = sm(0.35, 0.5, p) * (1 - sm(0.68, 0.85, p));
-  const N = 90, cord = [];
-  const dx = B[0] - A[0], dy = B[1] - A[1], dl = Math.hypot(dx, dy) || 1, nx = -dy / dl, ny = dx / dl;
-  for (let k = 0; k <= N; k++) {
-    const u = k / N, env2 = Math.sin(Math.PI * u);
-    const sag = env2 * S * 0.2 * (1 - tension);
-    const wave = Math.sin(u * Math.PI * 3 - ph * 2) * S * 0.07 * env2 * (1 - 0.6 * tension);
-    cord.push([A[0] + dx * u + nx * wave, A[1] + dy * u + ny * wave + sag]);
-  }
-  // cuando aparece la palabra, el cordón le da la vuelta: sale de una mano,
-  // rodea "VINCULO" (algo más de una vuelta) y llega a la otra
-  // el lazo se dibuja de mano a mano (draw) y después se apaga (fade); el cordón suelto se desvanece
-  const draw = sm(0.31, 0.43, p), fade = 1 - sm(0.86, 0.97, p), around = draw * fade;
-  const loopPath = [];
-  if (around > 0.001) {
-    c.font = `800 ${S * 0.4}px "Bricolage Grotesque"`;
-    const ww = c.measureText('VINCULO').width;
-    const ox = W / 2, oy = H / 2, rx = ww * 0.6, ry = S * 0.3;
-    const a0 = Math.PI, turns = 1.15;
-    for (let k = 0; k <= N; k++) {
-      const u = k / N;
-      let tx, ty;
-      if (u < 0.12) {                                     // de la mano izquierda al lazo
-        const q = u / 0.12, ex = ox + Math.cos(a0) * rx, ey = oy + Math.sin(a0) * ry;
-        tx = A[0] + (ex - A[0]) * q; ty = A[1] + (ey - A[1]) * q + Math.sin(q * Math.PI) * S * 0.05;
-      } else if (u > 0.88) {                              // del lazo a la mano derecha
-        const q = (u - 0.88) / 0.12, ae = a0 + turns * TAU, ex = ox + Math.cos(ae) * rx, ey = oy + Math.sin(ae) * ry;
-        tx = ex + (B[0] - ex) * q; ty = ey + (B[1] - ey) * q - Math.sin(q * Math.PI) * S * 0.05;
-      } else {                                            // la vuelta alrededor de la palabra
-        const q = (u - 0.12) / 0.76, a = a0 + q * turns * TAU;
-        const wob = 1 + 0.06 * Math.sin(a * 3 + ph * 2) + q * 0.08;
-        tx = ox + Math.cos(a) * rx * wob; ty = oy + Math.sin(a) * ry * wob;
-      }
-      loopPath.push([tx, ty]);
+  // 1–3 · viruta, encuentro y trenza
+  const pathA = (s) => bez([-0.06 * W, 0.7 * H], [0.22 * W, 0.22 * H], [0.5 * W, 0.5 * H], s);
+  const pathB = (s) => bez([1.06 * W, 0.3 * H], [0.78 * W, 0.8 * H], [0.5 * W, 0.5 * H], s);
+  const braid = (u) => [W * (0.18 + 0.64 * u), H * 0.5 + S * 0.07 * Math.sin(u * TAU + t * 0.9)];
+  const gA = sm(0, 3, t), gB = sm(1.8, 4.5, t), kB = sm(4.2, 6.0, t), vS = 1 - sm(7.0, 8.6, t);
+  if (vS > 0.01 && (gA > 0.001 || gB > 0.001)) {
+    c.filter = `blur(${S * 0.004}px)`;
+    const fA = (s) => { const a = pathA(s), b = braid(s); return [lerp(a[0], b[0], kB), lerp(a[1], b[1], kB)]; };
+    const fB = (s) => { const a = pathB(s), b = braid(1 - s); return [lerp(a[0], b[0], kB), lerp(a[1], b[1], kB)]; };
+    const R = S * (0.045 + 0.02 * kB), w = S * 0.03;
+    if (gA > 0.001) strand(c, fA, 0, Math.max(0.001, gA), R, 5 + kB * 2, 0, w, 0.16 * vS, t);
+    if (gB > 0.001) strand(c, fB, 0, Math.max(0.001, gB), R, 3.5 + kB * 3.5, Math.PI * kB, w * 0.85, 0.14 * vS, t);
+    // donde se tocan, el calor sube (el encuentro)
+    const touch = sm(3.6, 4.6, t) * (1 - sm(6.2, 7.2, t));
+    if (touch > 0.01) {
+      c.filter = `blur(${S * 0.03}px)`;
+      const g = c.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, S * 0.22);
+      g.addColorStop(0, heatRGB(0.22 * touch)); g.addColorStop(1, 'rgb(0,0,0)');
+      c.fillStyle = g; c.beginPath(); c.arc(W / 2, H / 2, S * 0.22, 0, TAU); c.fill();
     }
   }
-  c.filter = `blur(${S * 0.004}px)`;
-  c.lineWidth = S * 0.01;
-  if (around < 0.999) { c.strokeStyle = heatRGB(0.13 * (1 - Math.min(1, around * 1.5))); polyline(c, cord); c.stroke(); }
-  if (loopPath.length) {
-    c.strokeStyle = heatRGB(0.13 * fade);
-    polyline(c, loopPath.slice(0, Math.max(2, Math.round(draw * (N + 1))))); c.stroke();
+
+  // 4–6 · la cadena: eslabones distintos que se enganchan; después rodean la palabra
+  const n = 15, tension = sm(8.0, 9.0, t) * (1 - sm(9.6, 10.4, t)), toWord = sm(9.8, 11.4, t);
+  const lv = 1 - sm(15.4, 17.0, t);
+  const chainPt = (u) => [W * (0.08 + 0.84 * u), H * 0.5 + S * 0.13 * (1 - 0.8 * tension) * Math.sin(u * TAU * 1.4 - t * 1.1)];
+  const ex = W * 0.44, ey = S * 0.235;               // elipse que rodea la palabra
+  for (let i = 0; i < n; i++) {
+    const d = Math.abs(i - (n - 1) / 2) / ((n - 1) / 2);   // del centro hacia afuera
+    const k = sm(6.0 + d * 2.0, 6.7 + d * 2.0, t) * lv;
+    if (k < 0.01) continue;
+    const u = i / (n - 1);
+    const [cx0, cy0, nx, ny] = frame(chainPt, u);
+    const tang0 = Math.atan2(nx, -ny);
+    const ang = (i / n) * TAU + t * 0.22;
+    const ox = W / 2 + Math.cos(ang) * ex, oy = H / 2 + Math.sin(ang) * ey;
+    const tang1 = ang + Math.PI / 2;
+    const x = lerp(cx0, ox, toWord), y = lerp(cy0, oy, toWord), rot = lerp(tang0, tang1, toWord);
+    const big = 0.8 + 0.5 * rnd(i + 3), thick = 0.7 + 0.6 * rnd(i + 11);
+    const rx = S * 0.055 * big * (0.4 + 0.6 * k) * (1 - 0.35 * toWord);
+    const edge = i % 2 === 1;                                        // uno de frente, uno de canto: se enganchan
+    const ry = edge ? rx * (0.16 + 0.1 * Math.sin(t * 2 + i)) : rx * (0.55 + 0.1 * rnd(i));
+    c.filter = `blur(${S * 0.004}px)`;
+    link(c, x, y, rx, ry, rot, S * 0.014 * thick, 0.22 * k);
+    // unidades del organismo: algunos eslabones llevan un pequeño brote
+    if (i % 3 === 0) {
+      c.filter = `blur(${S * 0.012}px)`;
+      const bx = x + Math.cos(rot + Math.PI / 2) * rx * 0.9, by = y + Math.sin(rot + Math.PI / 2) * rx * 0.9;
+      oval(c, bx, by, S * 0.018 * big, S * 0.026 * big, rot, 0.16 * k * (0.8 + 0.4 * Math.sin(t * 3 + i)));
+    }
   }
 
-  // cuentas que viajan por el cordón (la señal, como un sifonóforo)
-  c.filter = `blur(${S * 0.008}px)`;
-  for (let i = 0; i < 14; i++) {
-    const u = mod(i / 14 + t / 6, 1), k = Math.min(N - 1, Math.floor(u * N));
-    const [x, y] = cord[k], [x2, y2] = cord[k + 1];
-    const ang = Math.atan2(y2 - y, x2 - x), pul = Math.sin(Math.PI * u);
-    oval(c, x, y, S * 0.022 * pul, S * 0.012 * pul, ang, 0.09 * pul);
+  // el rastro: manos en trama que tiran de los extremos
+  const hv = sm(7.8, 8.6, t) * (1 - sm(9.4, 10.2, t));
+  if (hv > 0.01) {
+    c.filter = `blur(${S * 0.02}px)`;
+    const [lx, ly] = chainPt(0), [rx2, ry2] = chainPt(1);
+    hand(c, lx - S * 0.02, ly, 1, S, 0.06 * hv, tension);
+    hand(c, rx2 + S * 0.02, ry2, -1, S, 0.06 * hv, tension);
   }
 
-  // lo que queda: la palabra, escrita por el cordón mientras las manos se retiran
-  const wenv = sm(0.36, 0.42, p) * (1 - sm(0.86, 0.95, p));
+  // la palabra, cosida por un hilo
+  const wenv = sm(11.0, 11.8, t) * (1 - sm(15.6, 16.8, t));
   if (wenv > 0.01) {
-    const reveal = sm(0.36, 0.45, p);
-    const fs = S * 0.4;
+    const fs = S * 0.34;
     c.font = `800 ${fs}px "Bricolage Grotesque"`;
-    c.textAlign = 'left'; c.textBaseline = 'middle';
-    const w = c.measureText('VINCULO').width, x0 = W / 2 - w / 2;
-    c.save();
-    c.beginPath(); c.rect(x0 - S * 0.1, 0, (w + S * 0.2) * reveal, H); c.clip();
-    c.filter = `blur(${S * 0.007}px)`;
-    for (let e = 3; e >= 0; e--) {
-      c.fillStyle = heatRGB(e === 0 ? 0.13 * wenv : 0.025 * wenv);
-      c.fillText('VINCULO', x0 - e * S * 0.03, H * 0.5);
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    const ww = c.measureText('VINCULO').width;
+    c.filter = `blur(${S * 0.045}px)`;                                // borde quemado
+    c.fillStyle = heatRGB(0.05 * wenv); c.fillText('VINCULO', W / 2, H * 0.47);
+    c.filter = `blur(${S * 0.008}px)`;
+    for (let e = 2; e >= 0; e--) {
+      c.fillStyle = heatRGB(e === 0 ? 0.12 * wenv : 0.025 * wenv);
+      c.fillText('VINCULO', W / 2 - e * S * 0.025, H * 0.47);
     }
-    c.restore();
+    // hilo que entra y sale de las letras
+    const rev = sm(11.2, 12.6, t);
+    c.filter = `blur(${S * 0.003}px)`;
+    c.strokeStyle = heatRGB(0.2 * wenv); c.lineWidth = S * 0.0045;
+    c.beginPath();
+    const x0 = W / 2 - ww * 0.58, x1 = W / 2 + ww * 0.58;
+    for (let k = 0; k <= 200 * rev; k++) {
+      const u = k / 200, x = lerp(x0, x1, u);
+      const y = H * 0.47 + Math.sin(u * TAU * 4.5 + t * 1.4) * fs * 0.42 * Math.sin(Math.PI * u);
+      k ? c.lineTo(x, y) : c.moveTo(x, y);
+    }
+    c.stroke();
+  }
+
+  // bajada y logo
+  const benv = sm(12.2, 13.0, t) * (1 - sm(15.4, 16.4, t));
+  if (benv > 0.01) {
+    c.filter = `blur(${S * 0.004}px)`;
+    c.font = `600 ${S * 0.065}px "Instrument Sans"`;
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillStyle = heatRGB(0.09 * benv);
+    c.fillText('La conexión', W / 2, H * 0.83);
+    if (logoPaths) {
+      const lw = S * 0.32, sc = lw / logoVB[2];
+      c.save(); c.translate(W / 2 - lw / 2, H * 0.885); c.scale(sc, sc);
+      c.fillStyle = heatRGB(0.08 * benv);
+      logoPaths.forEach((p) => c.fill(p));
+      c.restore();
+    }
   }
   c.filter = 'none';
 }
 
 /* ---------- dibujo ---------- */
 function render(t) {
-  const p = t / LOOP;
-  const gl = gauss(p, 0.3, 0.012) + 0.6 * gauss(p, 0.37, 0.01);   // glitch: el toque y la palabra
+  const gl = gauss(t, 6.1, 0.12) + 0.7 * gauss(t, 11.1, 0.1) + 0.5 * gauss(t, 4.4, 0.1);   // encuentro, cadena, palabra
   shader(sh);
   sh.setUniform('uHeat', heat);
   sh.setUniform('uRamp', rampG);

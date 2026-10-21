@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bioferia · Sumar para conectar (2D)</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&family=Instrument+Sans:wght@500..600&display=swap">
+  <style>
+    html, body { margin: 0; height: 100%; background: #2b2b2b; overflow: hidden; }
+    main { height: 100%; display: grid; place-items: center; }
+    main canvas { max-width: 100vw; max-height: 100vh; width: auto !important; height: auto !important; }
+  </style>
+</head>
+<body>
+<main id="stage"></main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+<script>
+/* =========================================================================
+   TAGLINE 2D · "Sumar para conectar"   (16:9 · loop de 12 s · concepto general)
+   Una sola idea: muchos puntos (lo individual) entran desde fuera del cuadro,
+   se suman en un solo cuerpo y su onda sale del cuadro (lo colectivo).
+     0–4 s    los puntos entran desde fuera del cuadro
+     3–5.6 s  se juntan en un cuerpo que late
+     5.6–7 s  una onda grande sale por los bordes
+     7–11.4 s "Sumar para conectar" se condensa desde el calor + logo
+   Paleta del concepto: azul, violeta, verde y un poco de rosa.
+   Calor en dos capas: estela (puntos, cuerpo, onda) y tipografía (sin estela).
+   window.T = segundos fija un instante · exportMP4() guarda el video (con server.js).
+   ========================================================================= */
+const LOOP = 12;
+const CW = 1920, CH = 1080;
+const Q = 0.5;
+
+const RAMP = [
+  [0.00, '#ffffff'], [0.08, '#d9f1e0'], [0.17, '#22a45f'], [0.27, '#0f3f86'],
+  [0.4, '#2a2db8'], [0.55, '#7650d8'], [0.7, '#e49be4'], [0.85, '#f6d6f4'], [1.00, '#e2f7ff'],
+];
+
+const VERT = `
+precision highp float;
+attribute vec3 aPosition; attribute vec2 aTexCoord;
+uniform mat4 uModelViewMatrix, uProjectionMatrix;
+varying vec2 vUv;
+void main(){ vUv = aTexCoord; gl_Position = uProjectionMatrix * uModelViewMatrix * vec4(aPosition, 1.0); }`;
+
+const FRAG = `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D uHeat, uType, uRamp;
+uniform vec2 uRes;
+uniform float uTime, uCell;
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y); }
+vec3 ramp(float h){ return texture2D(uRamp, vec2(clamp(h, 0.0, 1.0), 0.5)).rgb; }
+float heatAt(vec2 uv, vec2 uvT){
+  vec2 o = 1.5 / uRes;
+  float h = texture2D(uHeat, uv).r * 0.25
+    + (texture2D(uHeat, uv + vec2(o.x, 0.0)).r + texture2D(uHeat, uv - vec2(o.x, 0.0)).r
+     + texture2D(uHeat, uv + vec2(0.0, o.y)).r + texture2D(uHeat, uv - vec2(0.0, o.y)).r) * 0.125
+    + (texture2D(uHeat, uv + o).r + texture2D(uHeat, uv - o).r
+     + texture2D(uHeat, uv + vec2(o.x, -o.y)).r + texture2D(uHeat, uv + vec2(-o.x, o.y)).r) * 0.0625;
+  h += (hash(uv * uRes + uTime) - 0.5) / 255.0;
+  float v = smoothstep(0.02, 0.06, h) * max(h - 0.02, 0.0) + texture2D(uType, uvT).r;
+  return 1.0 - exp(-v * 1.8);
+}
+void main(){
+  vec2 wp = vUv * vec2(6.0, 3.4);
+  vec2 wv = (vec2(vnoise(wp + uTime * 0.35), vnoise(wp + 7.3 - uTime * 0.3)) - 0.5);
+  vec2 uv = vUv + wv * 0.014;
+  vec2 uvT = vUv + wv * 0.006;
+  float H = heatAt(uv, uvT);
+  vec3 col = ramp(H);
+  // trama de puntos donde el calor se apaga
+  float a = 0.4, ca = cos(a), sa = sin(a);
+  vec2 px = vUv * uRes;
+  vec2 r = vec2(ca * px.x - sa * px.y, sa * px.x + ca * px.y);
+  vec2 cell = (floor(r / uCell) + 0.5) * uCell, f = fract(r / uCell) - 0.5;
+  vec2 cp = vec2(ca * cell.x + sa * cell.y, -sa * cell.x + ca * cell.y) / uRes;
+  float Hc = heatAt(cp, cp);
+  float rad = sqrt(Hc) * 0.75;
+  float dotM = smoothstep(rad, rad - 0.12, length(f));
+  float dots = smoothstep(0.2, 0.06, H) * step(0.012, Hc);
+  col = mix(col, mix(vec3(1.0), ramp(Hc + 0.22), dotM), dots);
+  // isolíneas suaves (verde / rosa)
+  float b = H * 6.0, fb = fract(b), d2 = min(fb, 1.0 - fb);
+  float line = (1.0 - smoothstep(0.0, 0.06, d2)) * smoothstep(0.22, 0.32, H) * (1.0 - smoothstep(0.5, 0.6, texture2D(uType, uvT).r));
+  col = mix(col, mod(floor(b + 0.5), 2.0) < 1.0 ? vec3(0.13, 0.64, 0.37) : vec3(0.89, 0.6, 0.89), line * 0.3);
+  col += (hash(gl_FragCoord.xy + fract(uTime) * 91.0) - 0.5) * 0.04 * smoothstep(0.0, 0.05, H + dots * Hc);
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+let sh, heat, hctx, typeG, tctx, rampG, logoPaths = null, logoVB = null, lastT = null;
+
+function setup() {
+  pixelDensity(1);
+  createCanvas(CW, CH, WEBGL).parent('stage');
+  document.fonts.load('800 100px "Bricolage Grotesque"');
+  sh = createShader(VERT, FRAG);
+  heat = createGraphics(Math.round(CW * Q), Math.round(CH * Q)); heat.pixelDensity(1);
+  hctx = heat.drawingContext;
+  hctx.fillStyle = '#000'; hctx.fillRect(0, 0, heat.width, heat.height);
+  typeG = createGraphics(CW, CH); typeG.pixelDensity(1); tctx = typeG.drawingContext;
+  rampG = createGraphics(256, 1); rampG.pixelDensity(1);
+  const rc = rampG.drawingContext, gr = rc.createLinearGradient(0, 0, 256, 0);
+  RAMP.forEach(([p, c]) => gr.addColorStop(p, c));
+  rc.fillStyle = gr; rc.fillRect(0, 0, 256, 1);
+  fetch('../assets/bioferia-logo.svg').then((r) => r.text()).then((svg) => {
+    const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+    logoVB = doc.documentElement.getAttribute('viewBox').split(/\s+/).map(Number);
+    logoPaths = [...doc.querySelectorAll('path')].map((p) => new Path2D(p.getAttribute('d')));
+  }).catch(() => {});
+}
+
+const TAU = Math.PI * 2;
+const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const mod = (a, n) => ((a % n) + n) % n;
+const gauss = (x, c, w) => { const q = (x - c) / w; return Math.exp(-q * q); };
+const lerp = (a, b, k) => a + (b - a) * k;
+const rnd = (n) => { const v = Math.sin(n * 12.9898) * 43758.5453; return v - Math.floor(v); };
+const HI = (v) => `rgb(${Math.round(255 * Math.min(1, Math.max(0, v)))},0,0)`;
+const BRIC = (px) => `800 ${px}px "Bricolage Grotesque"`;
+
+// tipografía térmica: halo verde suave + cuerpo azul/violeta (sin estela, legible)
+function word(txt, x, y, fs, v, core = 0.42, soft = 0) {
+  const c = tctx, S = CH;
+  c.font = BRIC(fs); c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.filter = `blur(${S * (0.035 + soft * 0.04)}px)`; c.fillStyle = HI(0.2 * v); c.fillText(txt, x, y);
+  c.filter = `blur(${S * (0.004 + soft * 0.03)}px)`; c.fillStyle = HI(core * v * (1 - soft * 0.5)); c.fillText(txt, x, y);
+}
+
+// puntos: cada uno entra desde fuera del cuadro y viaja al centro
+const N = 34;
+const DOTS = Array.from({ length: N }, (_, i) => {
+  const a = (i / N) * TAU + rnd(i) * 0.4;
+  return { a, d: 1.25 + rnd(i + 3) * 0.5, delay: rnd(i + 7) * 1.2, size: 0.022 + rnd(i + 11) * 0.02, curl: (rnd(i + 13) - 0.5) * 1.6 };
+});
+
+/* ---------- un cuadro ---------- */
+function heatFrame(t) {
+  const W = heat.width, H = heat.height, S = H, c = hctx;
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.globalCompositeOperation = 'source-over'; c.filter = 'none';
+  c.fillStyle = 'rgba(0,0,0,0.1)'; c.fillRect(0, 0, W, H);
+  c.globalCompositeOperation = 'lighter';
+  tctx.setTransform(1, 0, 0, 1, 0, 0); tctx.globalCompositeOperation = 'source-over'; tctx.filter = 'none';
+  tctx.fillStyle = '#000'; tctx.fillRect(0, 0, CW, CH); tctx.globalCompositeOperation = 'lighter';
+
+  const cx = W / 2, cy = H / 2;
+  const fadeAll = 1 - sm(6.6, 7.4, t);                 // los puntos y el cuerpo se van para el cierre
+
+  // 1 · puntos que entran desde fuera del cuadro (con estela)
+  c.filter = `blur(${S * 0.012}px)`;
+  for (const p of DOTS) {
+    const k = sm(p.delay, p.delay + 3.0, t);            // 0 = afuera, 1 = en el centro
+    if (k >= 1 || fadeAll <= 0) continue;
+    const r = p.d * (1 - k) * W * 0.6, a = p.a + p.curl * k;
+    const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r * 0.62;
+    const g = c.createRadialGradient(x, y, 0, x, y, S * p.size * 2);
+    g.addColorStop(0, HI(0.06 * fadeAll)); g.addColorStop(1, 'rgb(0,0,0)');
+    c.fillStyle = g; c.beginPath(); c.arc(x, y, S * p.size * 2, 0, TAU); c.fill();
+  }
+
+  // 2 · el cuerpo y sus ondas: van a la capa sin estela (resolución completa, degradado continuo)
+  const B = tctx, Z = 1 / Q;
+  B.save(); B.setTransform(Z, 0, 0, Z, 0, 0);
+  const body = sm(1.6, 4.2, t) * lerp(0.3, 1, fadeAll) * (1 - sm(11.0, 11.9, t));
+  if (body > 0.01) {
+    const beat = gauss(mod(t, 1.0), 0.12, 0.06) + 0.6 * gauss(mod(t, 1.0), 0.32, 0.06);
+    const R = S * (0.08 + 0.2 * body + 0.03 * beat * body) * 1.6;
+    B.filter = `blur(${S * 0.04 * Z}px)`;
+    const g = B.createRadialGradient(cx, cy, 0, cx, cy, R);
+    for (let i = 0; i <= 12; i++) {                      // caída gaussiana, sin escalones
+      const u = i / 12;
+      g.addColorStop(u, HI((0.5 + 0.2 * beat) * body * Math.exp(-u * u * 3.2) * (1 - u)));
+    }
+    B.fillStyle = g; B.beginPath(); B.ellipse(cx, cy, R * 1.25, R, 0, 0, TAU); B.fill();
+  }
+
+  // 3 · ondas: pequeñas con cada latido, una grande que sale del cuadro
+  B.filter = `blur(${S * 0.03 * Z}px)`;
+  for (let j = 0; j < 3; j++) {
+    const lt = mod(t - j * 1.0, 3.0);
+    const k = body * Math.exp(-lt * 1.2);
+    if (k < 0.01) continue;
+    const r = S * (0.25 + lt * 0.35);
+    B.strokeStyle = HI(0.3 * k); B.lineWidth = S * 0.04;
+    B.beginPath(); B.ellipse(cx, cy, r * 1.25, r, 0, 0, TAU); B.stroke();
+  }
+  const big = t - 5.6;
+  if (big > 0 && big < 2.4) {
+    const k = Math.exp(-big * 1.1) * sm(0, 0.1, big);
+    for (let j = 0; j < 2; j++) {
+      const r = S * (0.3 + Math.pow(big, 0.8) * 0.9) - j * S * 0.12;
+      if (r <= 0) continue;
+      B.filter = `blur(${S * 0.05 * Z}px)`; B.strokeStyle = HI(0.7 * k * (1 - j * 0.4)); B.lineWidth = S * (0.12 + big * 0.06);
+      B.beginPath(); B.ellipse(cx, cy, r * 1.3, r, 0, 0, TAU); B.stroke();
+    }
+  }
+  B.restore();
+
+  // 5 · cierre legible
+  const e4 = sm(7.0, 7.6, t) * (1 - sm(11.2, 11.8, t));
+  if (e4 > 0.01) {
+    const soft = 1 - sm(7.0, 8.2, t) + sm(11.0, 11.8, t) * 0.8;
+    const br = 1 + 0.012 * Math.sin(t * 2.4);
+    tctx.save(); tctx.translate(CW / 2, CH * 0.46); tctx.scale(br * (1 + soft * 0.05), br * (1 + soft * 0.05));
+    word('Sumar para conectar', 0, 0, CH * 0.15, e4, 0.36, soft);
+    tctx.restore();
+    if (logoPaths) {
+      const lw = CH * 0.3, sc = lw / logoVB[2];
+      tctx.filter = `blur(${CH * (0.003 + soft * 0.03)}px)`;
+      tctx.save(); tctx.translate(CW / 2 - lw / 2, CH * 0.64); tctx.scale(sc, sc);
+      tctx.fillStyle = HI(0.36 * e4); logoPaths.forEach((p) => tctx.fill(p));
+      tctx.restore();
+    }
+  }
+  c.filter = 'none';
+}
+
+/* ---------- dibujo ---------- */
+function render(t) {
+  shader(sh);
+  sh.setUniform('uHeat', heat);
+  sh.setUniform('uType', typeG);
+  sh.setUniform('uRamp', rampG);
+  sh.setUniform('uRes', [CW, CH]);
+  sh.setUniform('uTime', t);
+  sh.setUniform('uCell', CH / 90);
+  noStroke();
+  rect(-width / 2, -height / 2, width, height);
+}
+
+function draw() {
+  const t = mod(window.T != null ? window.T : millis() / 1000, LOOP);
+  if (window.T != null && lastT !== window.T) { for (let i = 45; i >= 1; i--) heatFrame(mod(t - i / 30, LOOP)); }
+  heatFrame(t);
+  lastT = window.T;
+  render(t);
+}
+
+/* ---------- exportar MP4 (requiere node server.js) ---------- */
+async function exportMP4(name = 'tagline-2d-sumar-para-conectar-1920x1080.mp4', fps = 30) {
+  const { Muxer, ArrayBufferTarget } = await import('https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/+esm');
+  const muxer = new Muxer({ target: new ArrayBufferTarget(), video: { codec: 'avc', width: CW, height: CH }, fastStart: 'in-memory' });
+  const enc = new VideoEncoder({ output: (c, m) => muxer.addVideoChunk(c, m), error: (e) => console.error(e) });
+  enc.configure({ codec: 'avc1.640028', width: CW, height: CH, bitrate: 24e6, framerate: fps });
+  const copy = document.createElement('canvas'); copy.width = CW; copy.height = CH;
+  const cc = copy.getContext('2d'), gl = drawingContext.canvas, total = LOOP * fps;
+  noLoop();
+  for (let f = -fps * 2; f < 0; f++) heatFrame(mod(f / fps, LOOP));
+  for (let f = 0; f < total; f++) {
+    const t = f / fps; heatFrame(t); render(t); cc.drawImage(gl, 0, 0);
+    const vf = new VideoFrame(copy, { timestamp: Math.round((f * 1e6) / fps), duration: Math.round(1e6 / fps) });
+    enc.encode(vf, { keyFrame: f % fps === 0 }); vf.close();
+    if (enc.encodeQueueSize > 6) await new Promise((r) => setTimeout(r, 0));
+  }
+  await enc.flush(); muxer.finalize();
+  await fetch('/export?name=' + encodeURIComponent(name), { method: 'POST', body: new Blob([muxer.target.buffer], { type: 'video/mp4' }) });
+  loop();
+  return name;
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bioferia · Impacto</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&display=swap">
+  <style>
+    html, body { margin: 0; height: 100%; background: #2b2b2b; overflow: hidden; }
+    main { height: 100%; display: grid; place-items: center; }
+    main canvas { max-width: 100vw; max-height: 100vh; width: auto !important; height: auto !important; }
+  </style>
+</head>
+<body>
+<main id="stage"></main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+<script>
+/* =========================================================================
+   IMPACTO · "la huella que queda"   (16:9 · loop de 12 s)
+   Misma familia que Pulso y Vínculo (calor + estela + trama + isolíneas + grano).
+     0–2 s    calma; una huella se acerca como una sombra que crece.
+     2 s      la pisada: destello amarillo y glitch.
+     2–5 s    una red de círculos finos se expande y se cruza (nodos donde se tocan).
+     4.5–10 s "IMPACTO" aparece deformada por las ondas y se endereza al calmarse.
+     10–12 s  queda solo la marca, que se enfría hasta la próxima pisada (loop).
+   window.T = segundos fija un instante · exportMP4() guarda el video (con server.js).
+   ========================================================================= */
+const LOOP = 12, T0 = 2.0;                        // T0 = instante de la pisada
+const CW = 1920, CH = 1080;
+const Q = 0.5;
+
+// mapa térmico de Impacto: blanco → lilas → azul de cuerpo → violeta → verde → amarillo (lo que cambió)
+const RAMP = [
+  [0.00, '#ffffff'], [0.07, '#f3eefc'], [0.18, '#d7c2f5'], [0.3, '#9d86f0'], [0.42, '#3f43e6'],
+  [0.54, '#2228b8'], [0.63, '#7a3fe0'], [0.7, '#22a85a'], [0.76, '#e6ff00'], [0.88, '#f2ff3a'], [1.0, '#fbffc4'],
+];
+
+const VERT = `
+precision highp float;
+attribute vec3 aPosition; attribute vec2 aTexCoord;
+uniform mat4 uModelViewMatrix, uProjectionMatrix;
+varying vec2 vUv;
+void main(){ vUv = aTexCoord; gl_Position = uProjectionMatrix * uModelViewMatrix * vec4(aPosition, 1.0); }`;
+
+const FRAG = `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D uHeat, uRamp, uLines;
+uniform vec2 uRes;
+uniform float uTime, uCell, uGlitch, uRip, uRipT;
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y); }
+vec3 ramp(float h){ return texture2D(uRamp, vec2(clamp(h, 0.0, 1.0), 0.5)).rgb; }
+float heatAt(vec2 uv){ return 1.0 - exp(-texture2D(uHeat, uv).r * 1.7); }
+void main(){
+  vec2 uv = vUv;
+  // refracción del agua: después de la pisada, toda la imagen ondula desde el centro
+  float asp = uRes.x / uRes.y;
+  vec2 d = (uv - 0.5) * vec2(asp, 1.0);
+  float r = length(d) + 1e-4;
+  float wv = sin(r * 55.0 - uRipT * 13.0) * exp(-r * 1.2);
+  uv -= (d / r) / vec2(asp, 1.0) * wv * uRip * 0.014;
+
+  float fr = floor(uTime * 24.0), row = floor(uv.y * 70.0);
+  uv.x += uGlitch * (hash(vec2(row, fr)) - 0.5) * 0.06 * step(0.8, hash(vec2(row * 1.7, fr + 3.0)));
+  vec2 wp = uv * vec2(6.0, 3.4);
+  uv += (vec2(vnoise(wp + uTime * 0.35), vnoise(wp + 7.3 - uTime * 0.3)) - 0.5) * 0.018;
+  float h = heatAt(uv);
+  float g = hash(gl_FragCoord.xy + fract(uTime) * 91.0) - 0.5;
+
+  // trama de puntos para el calor que se apaga
+  float a = 0.4, ca = cos(a), sa = sin(a);
+  vec2 px = vec2(uv.x * uRes.x, uv.y * uRes.y);
+  vec2 rr = vec2(ca * px.x - sa * px.y, sa * px.x + ca * px.y);
+  vec2 cell = (floor(rr / uCell) + 0.5) * uCell, f = fract(rr / uCell) - 0.5;
+  vec2 cp = vec2(ca * cell.x + sa * cell.y, -sa * cell.x + ca * cell.y);
+  float hc = heatAt(cp / uRes);
+  float rad = sqrt(hc) * 0.7;
+  float dotM = smoothstep(rad, rad - 0.12, length(f));
+  float dots = smoothstep(0.34, 0.1, h) * step(0.015, hc);
+
+  float ln = texture2D(uLines, uv).r;
+  float lh = 1.0 - exp(-ln * 3.0);
+  vec3 solid = ramp(h + g * 0.05);
+  vec3 dotCol = mix(ramp(0.0), ramp(clamp(0.22 + hc * 1.4, 0.0, 1.0)), dotM);
+  vec3 col = mix(solid, dotCol, dots);
+  col = mix(col, ramp(0.42 + lh * 0.55), smoothstep(0.03, 0.18, lh));   // líneas finas y nodos donde se cruzan
+
+  // isolíneas (amarillo / lila) como en "Huella viva"
+  float b = h * 7.0, fb = fract(b), dd = min(fb, 1.0 - fb);
+  float line = (1.0 - smoothstep(0.01, 0.045, dd)) * smoothstep(0.3, 0.45, h);
+  col = mix(col, mod(floor(b + 0.5), 2.0) < 1.0 ? vec3(0.92, 1.0, 0.0) : vec3(0.85, 0.6, 1.0), line * 0.6);
+
+  col += g * 0.04 * smoothstep(0.0, 0.05, h + dots * hc);
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+let sh, heat, hctx, rampG, lines, lctx, lastT = null;
+
+function setup() {
+  pixelDensity(1);
+  createCanvas(CW, CH, WEBGL).parent('stage');
+  document.fonts.load('800 100px "Bricolage Grotesque"');
+  sh = createShader(VERT, FRAG);
+  heat = createGraphics(Math.round(CW * Q), Math.round(CH * Q)); heat.pixelDensity(1);
+  hctx = heat.drawingContext;
+  hctx.fillStyle = '#000'; hctx.fillRect(0, 0, heat.width, heat.height);
+  lines = createGraphics(CW, CH); lines.pixelDensity(1); lctx = lines.drawingContext;
+  rampG = createGraphics(256, 1); rampG.pixelDensity(1);
+  const rc = rampG.drawingContext, gr = rc.createLinearGradient(0, 0, 256, 0);
+  RAMP.forEach(([p, c]) => gr.addColorStop(p, c));
+  rc.fillStyle = gr; rc.fillRect(0, 0, 256, 1);
+}
+
+const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const mod = (a, n) => ((a % n) + n) % n;
+const gauss = (x, c, w) => { const q = (x - c) / w; return Math.exp(-q * q); };
+const TAU = Math.PI * 2;
+
+const rnd = (n) => { const v = Math.sin(n * 12.9898) * 43758.5453; return v - Math.floor(v); };
+function heatRGB(v) { return `rgb(${Math.round(255 * Math.min(1, Math.max(0, v)))},0,0)`; }
+function oval(c, x, y, rx, ry, rot, v) { c.fillStyle = heatRGB(v); c.beginPath(); c.ellipse(x, y, rx, ry, rot, 0, TAU); c.fill(); }
+function wobblyRing(c, x, y, r, seed, t) {
+  c.beginPath();
+  for (let i = 0; i <= 120; i++) {
+    const a = (i / 120) * TAU;
+    const w = 1 + 0.035 * Math.sin(a * 3 + seed + t * 1.2) + 0.02 * Math.sin(a * 7 - seed * 2 + t * 1.8);
+    const px = x + Math.cos(a) * r * w, py = y + Math.sin(a) * r * w * 0.82;
+    i ? c.lineTo(px, py) : c.moveTo(px, py);
+  }
+}
+
+/* ---------- la huella: suela simple, tipo plantilla ----------
+   contorno suave (puntera ancha, cintura, talón), centro más caliente y una marca oval. */
+function solePath(c, s) {
+  c.beginPath();
+  c.ellipse(s * 0.02, -s * 0.28, s * 0.17, s * 0.28, -0.04, 0, TAU);
+  c.ellipse(s * 0.03, s * 0.08, s * 0.13, s * 0.22, 0.03, 0, TAU);
+  c.ellipse(s * 0.0, s * 0.34, s * 0.14, s * 0.18, 0, 0, TAU);
+}
+function foot(c, x, y, s, rot, v) {
+  c.save(); c.translate(x, y); c.rotate(rot);
+  const f0 = c.filter;
+  c.fillStyle = heatRGB(v * 0.55);                       // borde: más frío
+  solePath(c, s); c.fill();
+  c.filter = 'blur(' + (s * 0.05) + 'px)';                // interior caliente y difuso
+  c.fillStyle = heatRGB(v * 0.7);
+  c.save(); c.scale(0.78, 0.9); solePath(c, s); c.fill(); c.restore();
+  c.filter = 'blur(' + (s * 0.012) + 'px)';               // marca oval en la cintura
+  c.fillStyle = heatRGB(v * 0.35);
+  c.beginPath(); c.ellipse(s * 0.03, s * 0.02, s * 0.07, s * 0.028, 0, 0, TAU); c.fill();
+  c.filter = f0;
+  c.restore();
+}
+
+/* ---------- un cuadro de calor ----------
+   Vista desde abajo del piso, mirando hacia arriba: dos pisadas fuertes,
+   primero el pie izquierdo y después el derecho. */
+const STOMPS = [
+  { x: -0.27, t: 1.5, rot: -0.12, m: -1 },          // izquierdo (espejado)
+  { x: 0.27, t: 2.3, rot: 0.12, m: 1 },             // derecho
+];
+const T_LAST = 2.3;
+
+function sole(c, x, y, s, rot, m, v) {
+  c.save(); c.translate(x, y); c.scale(m, 1);
+  foot(c, 0, 0, s, rot * m, v);
+  c.restore();
+}
+
+function heatFrame(t) {
+  const W = heat.width, H = heat.height, S = H, c = hctx;
+  const cx = W * 0.5, cy = H * 0.52;
+  const ageL = t - T_LAST;                                // referencia: la última pisada
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.globalCompositeOperation = 'source-over'; c.filter = 'none';
+  c.fillStyle = 'rgba(0,0,0,0.12)'; c.fillRect(0, 0, W, H);
+  lctx.globalCompositeOperation = 'source-over'; lctx.fillStyle = '#000'; lctx.fillRect(0, 0, CW, CH);
+  lctx.globalCompositeOperation = 'lighter'; lctx.filter = 'blur(1.2px)';
+  c.globalCompositeOperation = 'lighter';
+  c.lineCap = 'round'; c.lineJoin = 'round';
+  const s = S * 0.6;
+  const fade = 1 - sm(7.2, 9.2, ageL);                    // todo se enfría antes de cerrar el loop
+
+  STOMPS.forEach((P, i) => {
+    const x = cx + P.x * S * 1.0, y = cy;
+    const age = t - P.t;
+
+    // la pierna: vista desde abajo, se aleja en perspectiva hacia arriba (difusa)
+    const lift = age < 0 ? sm(-1.4, 0, age) : 1;
+    const legV = (age < 0 ? 0.03 * lift : 0.022 * Math.exp(-age * 0.25)) * fade;
+    if (legV > 0.002) {
+      c.filter = `blur(${S * 0.06}px)`;
+      oval(c, x + P.x * S * 0.15, y - S * 0.42, S * 0.14, S * 0.3, P.x * 0.6, legV);
+      oval(c, x + P.x * S * 0.25, y - S * 0.8, S * 0.11, S * 0.25, P.x * 0.6, legV * 0.6);
+    }
+
+    // la suela baja hacia la cámara: crece y se enfoca hasta pisar el piso
+    if (age < 0 && age > -1.4) {
+      const k = sm(-1.4, 0, age);
+      c.filter = `blur(${S * (0.07 - 0.06 * k)}px)`;
+      sole(c, x, y, s * (0.6 + 0.4 * k), P.rot, P.m, 0.035 * k);
+    }
+
+    if (age >= 0) {
+      // la marca que queda: caliente en el golpe, se enfría de a poco
+      const under = 1 - 0.7 * sm(1.6, 2.6, ageL) * (1 - sm(7.0, 8.4, ageL));   // se apagan detrás de la palabra
+      const mark = (0.06 + 0.035 * Math.exp(-age * 1.2)) * fade * under;
+      c.filter = `blur(${S * 0.009}px)`;
+      sole(c, x, y, s, P.rot, P.m, mark);
+
+      // destello amarillo
+      if (age < 1.0) {
+        const fl = Math.exp(-age * 4.5);
+        c.filter = `blur(${S * 0.05}px)`;
+        const R = S * (0.32 + age * 0.4);
+        const g = c.createRadialGradient(x, y, 0, x, y, R);
+        g.addColorStop(0, heatRGB(0.18 * fl)); g.addColorStop(1, 'rgb(0,0,0)');
+        c.fillStyle = g; c.beginPath(); c.arc(x, y, R, 0, TAU); c.fill();
+      }
+
+      // ondas finas: círculos que nacen alrededor de la pisada y se expanden;
+      // donde se cruzan el calor se suma y se encienden los nodos
+      const L = lctx, sc = 1 / Q;
+      L.lineWidth = S * sc * 0.0032;
+      for (let j = 0; j < 9; j++) {
+        const h1 = rnd(i * 31 + j), h2 = rnd(i * 17 + j * 3 + 1), h3 = rnd(i * 7 + j * 5 + 2);
+        const lj = age - h3 * 1.1;
+        if (lj <= 0) continue;
+        const ox = x + (h1 - 0.5) * S * 0.55, oy = y + (h2 - 0.5) * S * 0.6;
+        const r = S * (0.04 + lj * (0.12 + 0.12 * h1));
+        const k = Math.exp(-lj * 0.5) * sm(0, 0.2, lj) * fade * (1 - 0.85 * sm(1.6, 2.6, ageL));
+        L.strokeStyle = heatRGB(0.32 * k);
+        L.beginPath(); L.arc(ox * sc, oy * sc, r * sc, 0, TAU); L.stroke();
+      }
+    }
+  });
+
+  // la palabra: aparece deformada por las ondas, con borde quemado, y se endereza al calmarse
+  const wenv = sm(2.0, 2.8, ageL) * (1 - sm(7.0, 8.4, ageL));
+  if (wenv > 0.01) {
+    const fs = S * 0.4;
+    c.font = `800 ${fs}px "Bricolage Grotesque"`;
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    // halo ancho: quema los bordes como en Pulso y Vínculo
+    c.filter = `blur(${S * 0.045}px)`;
+    c.fillStyle = heatRGB(0.05 * wenv);
+    c.fillText('IMPACTO', W / 2, H * 0.5);
+    c.filter = `blur(${S * (0.01 + 0.03 * (1 - sm(2.0, 3.6, ageL)))}px)`;
+    for (let e = 2; e >= 0; e--) {
+      c.fillStyle = heatRGB(e === 0 ? 0.1 * wenv : 0.025 * wenv);
+      c.fillText('IMPACTO', W / 2 - e * S * 0.03, H * 0.5 + e * S * 0.02 * (1 - sm(2.5, 5.5, ageL)));
+    }
+  }
+  c.filter = 'none';
+}
+
+/* ---------- dibujo ---------- */
+function render(t) {
+  const ageF = t - STOMPS[0].t, ageL = t - T_LAST;
+  const rip = ageF > 0 ? Math.exp(-ageL * 0.3) * (1 - sm(7.5, 9.2, ageL)) : 0;
+  shader(sh);
+  sh.setUniform('uHeat', heat);
+  sh.setUniform('uRamp', rampG);
+  sh.setUniform('uLines', lines);
+  sh.setUniform('uRes', [CW, CH]);
+  sh.setUniform('uTime', t);
+  sh.setUniform('uCell', CH / 95);
+  sh.setUniform('uGlitch', Math.min(1, gauss(ageF, 0.03, 0.1) + gauss(ageL, 0.03, 0.12) + 0.4 * gauss(ageL, 2.1, 0.08)));
+  sh.setUniform('uRip', Math.min(1, rip));
+  sh.setUniform('uRipT', Math.max(0, ageF));
+  noStroke();
+  rect(-width / 2, -height / 2, width, height);
+}
+
+function draw() {
+  const t = mod(window.T != null ? window.T : millis() / 1000, LOOP);
+  if (window.T != null && lastT !== window.T) { for (let i = 45; i >= 1; i--) heatFrame(mod(t - i / 30, LOOP)); }
+  heatFrame(t);
+  lastT = window.T;
+  render(t);
+}
+
+/* ---------- exportar MP4 (requiere node server.js) ---------- */
+async function exportMP4(name = 'impacto-1920x1080.mp4', fps = 30) {
+  const { Muxer, ArrayBufferTarget } = await import('https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/+esm');
+  const muxer = new Muxer({ target: new ArrayBufferTarget(), video: { codec: 'avc', width: CW, height: CH }, fastStart: 'in-memory' });
+  const enc = new VideoEncoder({ output: (c, m) => muxer.addVideoChunk(c, m), error: (e) => console.error(e) });
+  enc.configure({ codec: 'avc1.640028', width: CW, height: CH, bitrate: 24e6, framerate: fps });
+  const copy = document.createElement('canvas'); copy.width = CW; copy.height = CH;
+  const cc = copy.getContext('2d'), gl = drawingContext.canvas, total = LOOP * fps;
+  noLoop();
+  for (let f = -fps * 2; f < 0; f++) heatFrame(mod(f / fps, LOOP));     // pre-roll: la estela entra en régimen → loop sin salto
+  for (let f = 0; f < total; f++) {
+    const t = f / fps; heatFrame(t); render(t); cc.drawImage(gl, 0, 0);
+    const vf = new VideoFrame(copy, { timestamp: Math.round((f * 1e6) / fps), duration: Math.round(1e6 / fps) });
+    enc.encode(vf, { keyFrame: f % fps === 0 }); vf.close();
+    if (enc.encodeQueueSize > 6) await new Promise((r) => setTimeout(r, 0));
+  }
+  await enc.flush(); muxer.finalize();
+  await fetch('/export?name=' + encodeURIComponent(name), { method: 'POST', body: new Blob([muxer.target.buffer], { type: 'video/mp4' }) });
+  loop();
+  return name;
+}
+</script>
+</body>
+</html>

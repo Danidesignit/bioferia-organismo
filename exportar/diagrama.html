@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bioferia · Diagrama tiempo real</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Work+Sans:wght@400;500&display=swap">
+  <style>
+    body { margin: 0; padding: 24px; background: #ddd; }
+    canvas { width: 100%; max-width: 1400px; height: auto; display: block; background: #fff; }
+  </style>
+</head>
+<body>
+<canvas id="cv" width="2400" height="1100"></canvas>
+<script>
+/* Diagrama para la presentación: cómo viaja un pulso del celular a la pantalla.
+   exportPNG() lo guarda en exports/diagrama-tiempo-real.png (con node server.js). */
+const cv = document.getElementById('cv'), c = cv.getContext('2d');
+const W = cv.width, H = cv.height, INK = '#0a0a0a', GRAY = '#6b6b6b', VIO = '#6a2ec4';
+const HEAD = (w, px) => `${w} ${px}px "Instrument Sans"`;
+const BODY = (px) => `400 ${px}px "Work Sans"`;
+const img = (src) => new Promise((r) => { const i = new Image(); i.onload = () => r(i); i.src = src; });
+
+function rrect(x, y, w, h, r) { c.beginPath(); c.roundRect(x, y, w, h, r); }
+function wrap(text, x, y, maxW, lh) {
+  const words = text.split(' '); let line = '';
+  for (const w of words) {
+    const t = line ? line + ' ' + w : w;
+    if (c.measureText(t).width > maxW && line) { c.fillText(line, x, y); line = w; y += lh; } else line = t;
+  }
+  c.fillText(line, x, y); return y;
+}
+function arrow(x0, y0, x1, y1, dashed = false) {
+  c.save(); c.strokeStyle = INK; c.fillStyle = INK; c.lineWidth = 4; if (dashed) c.setLineDash([14, 12]);
+  c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1 - Math.sign(x1 - x0) * 22, y1); c.stroke(); c.setLineDash([]);
+  const d = Math.sign(x1 - x0);
+  c.beginPath(); c.moveTo(x1, y1); c.lineTo(x1 - d * 26, y1 - 14); c.lineTo(x1 - d * 26, y1 + 14); c.closePath(); c.fill();
+  c.restore();
+}
+function column(x, num, title, sub, desc, w = 560) {
+  c.textAlign = 'left'; c.textBaseline = 'alphabetic'; c.fillStyle = INK;
+  c.font = HEAD(600, 46); c.fillText(num + '.  ' + title, x, 790);
+  c.font = HEAD(500, 30); c.fillStyle = VIO; c.fillText(sub, x, 838);
+  c.font = BODY(30); c.fillStyle = INK; wrap(desc, x, 900, w, 42);
+}
+
+async function draw() {
+  await document.fonts.load('600 46px "Instrument Sans"'); await document.fonts.load('400 30px "Work Sans"');
+  await document.fonts.load('500 30px "Instrument Sans"');
+  const phone = await img('../presentacion/04-celular-vista-previa.png');
+  const screen = await img('../presentacion/08-pantalla-colectiva-solo-organismo.png');
+  c.fillStyle = '#fff'; c.fillRect(0, 0, W, H);
+
+  // 1 · celular
+  const ph = 600, pw = ph * phone.width / phone.height, px = 120 + (300 - pw / 2) + 40, py = 90;
+  c.save(); rrect(px, py, pw, ph, 28); c.clip(); c.drawImage(phone, px, py, pw, ph); c.restore();
+  c.lineWidth = 3; c.strokeStyle = INK; rrect(px, py, pw, ph, 28); c.stroke();
+  column(120, '1', 'Celular', 'Web móvil (sin app)', 'La persona dibuja su gesto. Se guarda como datos: puntos, tiempos y toques, más su nombre opcional.');
+
+  // 2 · servidor
+  const sx = 1110 - 170, sy = 220, s = 340;
+  rrect(sx, sy, s, s, 40); c.fillStyle = INK; c.fill();
+  c.fillStyle = '#fff';
+  for (let i = 0; i < 3; i++) {
+    rrect(sx + 50, sy + 62 + i * 78, s - 100, 50, 14); c.fill();
+    c.fillStyle = VIO; c.beginPath(); c.arc(sx + 90, sy + 87 + i * 78, 9, 0, Math.PI * 2); c.fill(); c.fillStyle = '#fff';
+  }
+  column(1110 - 230, '2', 'Servidor', 'Node.js en Render', 'Recibe el pulso, filtra el nombre y lo reenvía al instante. Guarda el historial reciente.', 540);
+
+  // 3 · pantalla
+  const sw = 520, shh = sw * screen.height / screen.width, scx = W - 120 - sw, scy = 390 - shh / 2;
+  c.save(); rrect(scx, scy, sw, shh, 16); c.clip(); c.drawImage(screen, scx, scy, sw, shh); c.restore();
+  c.lineWidth = 3; c.strokeStyle = INK; rrect(scx, scy, sw, shh, 16); c.stroke();
+  column(scx, '3', 'Pantalla colectiva', 'p5.js + shader', 'Escucha con una conexión siempre abierta y suma cada pulso al organismo, en vivo.', 520);
+
+  // flechas
+  const ax0 = px + pw + 40, ax1 = sx - 40, bx0 = sx + s + 40, bx1 = scx - 40;
+  arrow(ax0, 350, ax1, 350);
+  arrow(ax1, 470, ax0, 470, true);
+  arrow(bx0, 390, bx1, 390);
+  c.textAlign = 'center'; c.fillStyle = INK;
+  c.font = HEAD(600, 30); c.fillText('Envía el pulso', (ax0 + ax1) / 2, 322);
+  c.font = BODY(24); c.fillStyle = GRAY; c.fillText('datos, no imágenes', (ax0 + ax1) / 2, 395);
+  c.fillText('Confirma: «pulso sumado»', (ax0 + ax1) / 2, 515);
+  c.font = HEAD(600, 30); c.fillStyle = INK; c.fillText('Lo reenvía al instante', (bx0 + bx1) / 2, 362);
+  c.font = BODY(24); c.fillStyle = GRAY; c.fillText('a todas las pantallas abiertas', (bx0 + bx1) / 2, 435);
+
+  // franja inferior
+  c.fillStyle = INK; c.fillRect(120, 1010, W - 240, 2);
+  c.textAlign = 'left'; c.font = HEAD(600, 28); c.fillText('Publicación', 120, 1062);
+  c.font = BODY(28); c.fillText('El código vive en GitHub y Render lo publica solo con cada cambio. Todo es web: funciona en cualquier celular con navegador.', 330, 1062);
+}
+const ready = draw();
+
+async function exportPNG() {
+  await ready;
+  const blob = await new Promise((r) => cv.toBlob(r, 'image/png'));
+  await fetch('/export?name=diagrama-tiempo-real.png', { method: 'POST', body: blob });
+  return 'ok';
+}
+</script>
+</body>
+</html>

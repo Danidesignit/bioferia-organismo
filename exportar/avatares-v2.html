@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bioferia · Avatares v2</title>
+  <style>
+    html, body { margin: 0; background: #2b2b2b; }
+    #sheet { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; padding: 16px; }
+    #sheet canvas { width: 100%; height: auto; display: block; }
+    #stage { position: absolute; left: -99999px; }
+  </style>
+</head>
+<body>
+<div id="sheet"></div>
+<main id="stage"></main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+<script>
+/* =========================================================================
+   AVATARES v2 · objetos con carita (tiernos), con la estética térmica
+   El cuerpo de cada personaje es calor convertido con un mapa de la marca
+   (trama de puntos, isolíneas, grano). La carita se dibuja nítida encima:
+   ojos grandes con brillo, cachetes y una sonrisa chica.
+   exportAll() guarda los 6 PNG cuadrados en exports/ (con server.js).
+   ========================================================================= */
+const N = 1024;
+const Q = 0.5;
+
+const RAMPS = {
+  pulso:    [[0, '#ffffff'], [0.07, '#fbe8fb'], [0.18, '#f6bdf1'], [0.32, '#ef86e8'], [0.46, '#d955d8'], [0.58, '#9a2ce0'], [0.66, '#3a2fe0'], [0.73, '#1b2fb0'], [0.79, '#1fa35a'], [0.88, '#5fd13a'], [1, '#c8f53a']],
+  vinculo:  [[0, '#ffffff'], [0.07, '#e9efff'], [0.18, '#b7c8ff'], [0.32, '#6f8cff'], [0.46, '#3b5bf2'], [0.58, '#2a3fd6'], [0.66, '#1d2ba8'], [0.72, '#e874d8'], [0.79, '#22c8f0'], [0.88, '#3ff3ff'], [1, '#d6ffff']],
+  impacto:  [[0, '#ffffff'], [0.07, '#f3eefc'], [0.18, '#d7c2f5'], [0.3, '#9d86f0'], [0.42, '#3f43e6'], [0.54, '#2228b8'], [0.63, '#7a3fe0'], [0.7, '#22a85a'], [0.76, '#e6ff00'], [0.88, '#f2ff3a'], [1, '#fbffc4']],
+  concepto: [[0, '#ffffff'], [0.08, '#d9f1e0'], [0.17, '#22a45f'], [0.27, '#0f3f86'], [0.4, '#2a2db8'], [0.55, '#7650d8'], [0.7, '#e49be4'], [0.85, '#f6d6f4'], [1, '#e2f7ff']],
+  lima:     [[0, '#ffffff'], [0.08, '#eefbd8'], [0.2, '#b8f03a'], [0.34, '#22a85a'], [0.48, '#1b6fd0'], [0.6, '#2a2db8'], [0.72, '#7650d8'], [0.84, '#ef86e8'], [1, '#fff0fb']],
+  magenta:  [[0, '#ffffff'], [0.08, '#ffe6f4'], [0.2, '#ff8fd0'], [0.34, '#e0198a'], [0.48, '#7a2ce0'], [0.6, '#2a2db8'], [0.72, '#22c8f0'], [0.84, '#e6ff00'], [1, '#fbffc4']],
+};
+
+// cada personaje: un objeto simple de la feria con carita
+// face: centro de la cara (0..1), s: escala de la cara, mood: 'smile' | 'open' | 'w'
+const AVATARS = [
+  // heat: calor del cuerpo (elige el color del mapa) · glow: volumen del centro
+  { name: 'avatar-v2-01-gota',    ramp: 'vinculo',  shape: 'drop',     face: [0.5, 0.64], s: 1.4,  heat: 0.72, glow: 0.3, mood: 'smile', tilt: -0.05 },
+  { name: 'avatar-v2-02-brote',   ramp: 'lima',     shape: 'sprout',   face: [0.5, 0.63], s: 1.4,  heat: 0.16, glow: 0.12, mood: 'w',    tilt: 0.04 },
+  { name: 'avatar-v2-03-piedra',  ramp: 'impacto',  shape: 'pebble',   face: [0.5, 0.57], s: 1.45, heat: 0.78, glow: 0.3, mood: 'open', tilt: 0.0 },
+  { name: 'avatar-v2-04-nube',    ramp: 'concepto', shape: 'cloud',    face: [0.5, 0.57], s: 1.4,  heat: 0.62, glow: 0.2, mood: 'smile', tilt: 0.03 },
+  { name: 'avatar-v2-05-latido',  ramp: 'pulso',    shape: 'bean',     face: [0.5, 0.6],  s: 1.4,  heat: 0.24, glow: 0.12, mood: 'w',    tilt: -0.04 },
+  { name: 'avatar-v2-06-hongo',   ramp: 'magenta',  shape: 'mushroom', face: [0.5, 0.67], s: 1.15, heat: 0.18, glow: 0.12, mood: 'open', tilt: 0.05 },
+];
+
+const VERT = `
+precision highp float;
+attribute vec3 aPosition; attribute vec2 aTexCoord;
+uniform mat4 uModelViewMatrix, uProjectionMatrix;
+varying vec2 vUv;
+void main(){ vUv = aTexCoord; gl_Position = uProjectionMatrix * uModelViewMatrix * vec4(aPosition, 1.0); }`;
+
+const FRAG = `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D uHeat, uRamp;
+uniform vec2 uRes;
+uniform float uCell, uSeed;
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y); }
+vec3 ramp(float h){ return texture2D(uRamp, vec2(clamp(h, 0.0, 1.0), 0.5)).rgb; }
+float heatAt(vec2 uv){ return 1.0 - exp(-texture2D(uHeat, uv).r * 1.7); }
+void main(){
+  vec2 uv = vUv;
+  vec2 wp = uv * 5.0 + uSeed;
+  uv += (vec2(vnoise(wp), vnoise(wp + 7.3)) - 0.5) * 0.012;
+  float h = heatAt(uv);
+  float g = hash(gl_FragCoord.xy + uSeed) - 0.5;
+  float a = 0.4, ca = cos(a), sa = sin(a);
+  vec2 px = uv * uRes;
+  vec2 r = vec2(ca * px.x - sa * px.y, sa * px.x + ca * px.y);
+  vec2 cell = (floor(r / uCell) + 0.5) * uCell, f = fract(r / uCell) - 0.5;
+  vec2 cp = vec2(ca * cell.x + sa * cell.y, -sa * cell.x + ca * cell.y);
+  float hc = heatAt(cp / uRes);
+  float rad = sqrt(hc) * 0.7;
+  float dotM = smoothstep(rad, rad - 0.12, length(f));
+  float dots = smoothstep(0.34, 0.1, h) * step(0.015, hc);
+  vec3 col = mix(ramp(h + g * 0.05), mix(ramp(0.0), ramp(clamp(0.22 + hc * 1.4, 0.0, 1.0)), dotM), dots);
+  float b = h * 7.0, fb = fract(b), d = min(fb, 1.0 - fb);
+  float line = (1.0 - smoothstep(0.01, 0.045, d)) * smoothstep(0.3, 0.45, h);
+  col = mix(col, ramp(min(1.0, h + 0.3)), line * 0.45);
+  col += g * 0.04 * smoothstep(0.0, 0.05, h + dots * hc);
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+let sh, heat, hctx, rampG;
+function setup() {
+  pixelDensity(1);
+  createCanvas(N, N, WEBGL).parent('stage');
+  sh = createShader(VERT, FRAG);
+  heat = createGraphics(N * Q, N * Q); heat.pixelDensity(1); hctx = heat.drawingContext;
+  rampG = createGraphics(256, 1); rampG.pixelDensity(1);
+  noLoop();
+  document.fonts.ready.then(() => AVATARS.forEach((A, i) => {
+    const cv = renderAvatar(A, i + 1); cv.dataset.name = A.name; document.getElementById('sheet').appendChild(cv);
+  }));
+}
+function draw() {}
+
+const TAU = Math.PI * 2;
+const heatRGB = (v) => `rgb(${Math.round(255 * Math.min(1, Math.max(0, v)))},0,0)`;
+function glow(c, x, y, r, v) {
+  const g = c.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, heatRGB(v)); g.addColorStop(1, 'rgb(0,0,0)');
+  c.fillStyle = g; c.beginPath(); c.arc(x, y, r, 0, TAU); c.fill();
+}
+
+// silueta del objeto (coordenadas 0..1 del cuadrado)
+function shapePath(c, A, S) {
+  const P = (x, y) => [x * S, y * S];
+  c.beginPath();
+  if (A.shape === 'drop') {
+    c.moveTo(...P(0.5, 0.14));
+    c.bezierCurveTo(...P(0.6, 0.3), ...P(0.8, 0.44), ...P(0.8, 0.62));
+    c.bezierCurveTo(...P(0.8, 0.8), ...P(0.66, 0.88), ...P(0.5, 0.88));
+    c.bezierCurveTo(...P(0.34, 0.88), ...P(0.2, 0.8), ...P(0.2, 0.62));
+    c.bezierCurveTo(...P(0.2, 0.44), ...P(0.4, 0.3), ...P(0.5, 0.14));
+  } else if (A.shape === 'sprout' || A.shape === 'bean') {
+    c.ellipse(0.5 * S, 0.62 * S, 0.3 * S, 0.26 * S, 0, 0, TAU);
+  } else if (A.shape === 'pebble') {
+    c.moveTo(...P(0.2, 0.6));
+    c.bezierCurveTo(...P(0.18, 0.38), ...P(0.36, 0.26), ...P(0.54, 0.28));
+    c.bezierCurveTo(...P(0.76, 0.3), ...P(0.86, 0.46), ...P(0.82, 0.64));
+    c.bezierCurveTo(...P(0.78, 0.82), ...P(0.6, 0.86), ...P(0.46, 0.85));
+    c.bezierCurveTo(...P(0.28, 0.84), ...P(0.21, 0.74), ...P(0.2, 0.6));
+  } else if (A.shape === 'cloud') {
+    for (const [x, y, r] of [[0.32, 0.6, 0.17], [0.5, 0.46, 0.21], [0.68, 0.58, 0.17], [0.5, 0.66, 0.2]]) { c.moveTo((x + r) * S, y * S); c.arc(x * S, y * S, r * S, 0, TAU); }
+  } else if (A.shape === 'mushroom') {
+    c.ellipse(0.5 * S, 0.44 * S, 0.34 * S, 0.24 * S, 0, Math.PI, TAU); c.closePath();
+    c.moveTo(0.33 * S, 0.44 * S); c.roundRect(0.33 * S, 0.4 * S, 0.34 * S, 0.46 * S, 0.12 * S);
+  }
+}
+
+/* ---------- el objeto en calor ---------- */
+function drawBody(A, seed) {
+  const c = hctx, S = heat.width;
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.globalCompositeOperation = 'source-over'; c.filter = 'none';
+  c.fillStyle = '#000'; c.fillRect(0, 0, S, S);
+  c.globalCompositeOperation = 'lighter';
+  c.translate(S / 2, S / 2); c.rotate(A.tilt); c.translate(-S / 2, -S / 2);
+  // halo
+  c.filter = `blur(${S * 0.06}px)`; glow(c, S * 0.5, S * 0.56, S * 0.5, 0.1);
+  // cuerpo: borde tibio y centro caliente (volumen de globo)
+  c.filter = `blur(${S * 0.014}px)`; c.fillStyle = heatRGB(A.heat); shapePath(c, A, S); c.fill();
+  c.filter = `blur(${S * 0.06}px)`; glow(c, S * (A.face[0] - 0.1), S * (A.face[1] - 0.14), S * 0.2, A.glow);
+  // detalles del objeto
+  c.filter = `blur(${S * 0.01}px)`;
+  if (A.shape === 'sprout') {           // dos hojitas arriba
+    c.fillStyle = heatRGB(0.55);
+    c.beginPath(); c.ellipse(S * 0.42, S * 0.28, S * 0.1, S * 0.05, -0.6, 0, TAU); c.fill();
+    c.beginPath(); c.ellipse(S * 0.6, S * 0.26, S * 0.11, S * 0.05, 0.5, 0, TAU); c.fill();
+    c.strokeStyle = heatRGB(0.5); c.lineWidth = S * 0.02; c.lineCap = 'round';
+    c.beginPath(); c.moveTo(S * 0.5, S * 0.38); c.quadraticCurveTo(S * 0.5, S * 0.3, S * 0.52, S * 0.27); c.stroke();
+  }
+  if (A.shape === 'mushroom') {         // lunares en el sombrero
+    for (const [x, y, r] of [[0.36, 0.34, 0.04], [0.55, 0.27, 0.05], [0.68, 0.37, 0.035]]) { c.fillStyle = heatRGB(0.35); c.beginPath(); c.arc(x * S, y * S, r * S, 0, TAU); c.fill(); }
+  }
+  if (A.shape === 'bean') {             // un latido arriba
+    c.strokeStyle = heatRGB(0.5); c.lineWidth = S * 0.012; c.lineCap = 'round'; c.lineJoin = 'round';
+    c.beginPath(); c.moveTo(S * 0.3, S * 0.24); c.lineTo(S * 0.42, S * 0.24); c.lineTo(S * 0.47, S * 0.14); c.lineTo(S * 0.53, S * 0.32); c.lineTo(S * 0.58, S * 0.24); c.lineTo(S * 0.7, S * 0.24); c.stroke();
+  }
+  if (A.shape === 'drop') {             // gotitas alrededor
+    for (const [x, y, r] of [[0.18, 0.3, 0.025], [0.84, 0.36, 0.02], [0.8, 0.2, 0.014]]) glow(c, x * S, y * S, r * S * 2.5, 0.5);
+  }
+  if (A.shape === 'pebble') {           // círculos finos de impacto
+    c.strokeStyle = heatRGB(0.3); c.lineWidth = S * 0.005;
+    for (let i = 0; i < 3; i++) { c.beginPath(); c.ellipse(S * 0.5, S * 0.86, S * (0.25 + i * 0.08), S * (0.05 + i * 0.02), 0, 0, TAU); c.stroke(); }
+  }
+  c.setTransform(1, 0, 0, 1, 0, 0); c.filter = 'none';
+}
+
+/* ---------- la carita, nítida ---------- */
+function drawFace(c, A) {
+  const s = N * A.s, cx = N * A.face[0], cy = N * A.face[1];
+  c.save(); c.translate(N / 2, N / 2); c.rotate(A.tilt); c.translate(-N / 2, -N / 2);
+  const ink = '#140c2e';
+  // cachetes
+  c.filter = `blur(${s * 0.012}px)`; c.fillStyle = 'rgba(255, 90, 190, 0.55)';
+  [-1, 1].forEach((k) => { c.beginPath(); c.ellipse(cx + k * s * 0.15, cy + s * 0.05, s * 0.05, s * 0.028, 0, 0, TAU); c.fill(); });
+  c.filter = 'none';
+  // ojos grandes con brillo
+  [-1, 1].forEach((k) => {
+    const ex = cx + k * s * 0.095, ey = cy - s * 0.02;
+    c.fillStyle = ink; c.beginPath(); c.ellipse(ex, ey, s * 0.042, s * 0.052, 0, 0, TAU); c.fill();
+    c.fillStyle = '#ffffff';
+    c.beginPath(); c.arc(ex - s * 0.012, ey - s * 0.02, s * 0.016, 0, TAU); c.fill();
+    c.beginPath(); c.arc(ex + s * 0.015, ey + s * 0.016, s * 0.007, 0, TAU); c.fill();
+  });
+  // boca
+  c.strokeStyle = ink; c.lineWidth = s * 0.014; c.lineCap = 'round'; c.lineJoin = 'round';
+  const my = cy + s * 0.06;
+  c.beginPath();
+  if (A.mood === 'smile') { c.arc(cx, my - s * 0.012, s * 0.035, 0.2, Math.PI - 0.2); c.stroke(); }
+  else if (A.mood === 'w') { c.moveTo(cx - s * 0.04, my); c.quadraticCurveTo(cx - s * 0.02, my + s * 0.03, cx, my); c.quadraticCurveTo(cx + s * 0.02, my + s * 0.03, cx + s * 0.04, my); c.stroke(); }
+  else { c.fillStyle = ink; c.ellipse(cx, my + s * 0.005, s * 0.024, s * 0.02, 0, 0, TAU); c.fill();
+    c.fillStyle = '#ff6fb8'; c.beginPath(); c.ellipse(cx, my + s * 0.015, s * 0.014, s * 0.008, 0, 0, TAU); c.fill(); }
+  c.restore();
+}
+
+function renderAvatar(A, seed) {
+  const rc = rampG.drawingContext, gr = rc.createLinearGradient(0, 0, 256, 0);
+  RAMPS[A.ramp].forEach(([p, col]) => gr.addColorStop(p, col));
+  rc.clearRect(0, 0, 256, 1); rc.fillStyle = gr; rc.fillRect(0, 0, 256, 1);
+  drawBody(A, seed);
+  shader(sh);
+  sh.setUniform('uHeat', heat); sh.setUniform('uRamp', rampG);
+  sh.setUniform('uRes', [N, N]); sh.setUniform('uCell', N / 90); sh.setUniform('uSeed', seed * 3.7);
+  noStroke(); rect(-width / 2, -height / 2, width, height);
+  const out = document.createElement('canvas'); out.width = N; out.height = N;
+  const oc = out.getContext('2d'); oc.drawImage(drawingContext.canvas, 0, 0);
+  drawFace(oc, A);
+  return out;
+}
+
+async function exportAll() {
+  for (const cv of document.querySelectorAll('#sheet canvas')) {
+    const blob = await new Promise((r) => cv.toBlob(r, 'image/png'));
+    await fetch('/export?name=' + cv.dataset.name + '.png', { method: 'POST', body: blob });
+  }
+  return document.querySelectorAll('#sheet canvas').length;
+}
+</script>
+</body>
+</html>
